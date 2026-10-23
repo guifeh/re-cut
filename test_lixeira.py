@@ -164,3 +164,70 @@ def test_upload_compartilhado_volta_com_o_video_restaurado(ambiente):
     assert lx.item(segundo["id"])["upload"] is None
     lx.restaurar(segundo["id"])            # o segundo volta sem precisar do arquivo (já está em uploads/)
     assert outro.exists() and enviado.exists()
+
+
+def test_item_fantasma_some_da_lista(ambiente, monkeypatch):
+    lx, job, _ = ambiente
+    # o processo "cai" logo depois de gravar item.json: nada é movido
+    monkeypatch.setattr(lixeira.os, "replace", lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    for excluir in (lambda: lx.excluir_video(job), lambda: lx.excluir_corte(job / "fonte_corte01.json")):
+        with pytest.raises(KeyboardInterrupt):
+            excluir()
+    monkeypatch.undo()
+    assert len(list(lx.pasta.glob("*/item.json"))) == 2  # dois fantasmas no disco
+    assert lx.listar() == [] and (job / "fonte_corte01.mp4").exists()  # somem da lista; o vídeo segue intacto
+    assert lx.historico() == []  # nada foi excluído de verdade, então nada no histórico
+
+
+def test_devolucao_incompleta_nao_apaga_nada(ambiente, monkeypatch):
+    """O cenário da revisão: o .jpg falha ao mover e a devolução do .mp4 também falha (antivírus abriu o arquivo)."""
+    lx, job, _ = ambiente
+    original = lixeira.os.replace
+
+    def replace(origem, destino):
+        origem = str(origem)
+        if origem.endswith("fonte_corte01.jpg") or (origem.endswith("fonte_corte01.mp4") and "lixeira" in origem):
+            raise PermissionError(32, "em uso")
+        return original(origem, destino)
+    monkeypatch.setattr(lixeira.os, "replace", replace)
+    with pytest.raises(ValueError, match="movido só em parte"):
+        lx.excluir_corte(job / "fonte_corte01.json")
+    monkeypatch.undo()
+    itens = lx.listar()
+    assert len(itens) == 1  # o item ficou: o .mp4 só existe na lixeira
+    mp4_na_lixeira = lx.pasta / itens[0]["id"] / "corte" / "fonte_corte01.mp4"
+    assert mp4_na_lixeira.read_bytes() == b"x" * 10 and (job / "fonte_corte01.jpg").exists()
+    lx.restaurar(itens[0]["id"])  # restaura só o que está na lixeira; o resto já estava no lugar
+    assert all((job / f"fonte_corte01{ext}").exists() for ext in (".mp4", ".jpg", ".json", ".ass"))
+    assert lx.listar() == []
+
+
+def test_pasta_apagando_nao_vira_item(ambiente):
+    lx, job, _ = ambiente
+    item = lx.excluir_corte(job / "fonte_corte01.json")
+    os_pasta = lx.pasta / item["id"]
+    os_pasta.rename(lx.pasta / (lixeira.APAGANDO + item["id"]))  # sobra de um apagar interrompido
+    assert lx.listar() == []
+    with pytest.raises(FileNotFoundError):
+        lx.item(lixeira.APAGANDO + item["id"])
+
+
+def test_video_restaurado_em_parte_termina_depois(ambiente, monkeypatch):
+    """Restaurar: o job volta, o upload trava e a devolução do job também falha. Nada some e dá para terminar."""
+    lx, job, enviado = ambiente
+    item = lx.excluir_video(job)
+    original = lixeira.os.replace
+
+    def replace(origem, destino):
+        origem = str(origem)
+        if origem.endswith("minha-live.mp4") or (origem.endswith(job.name) and "jobs" in origem):
+            raise PermissionError(32, "em uso")  # upload travado; devolver o job para a lixeira também falha
+        return original(origem, destino)
+    monkeypatch.setattr(lixeira.os, "replace", replace)
+    with pytest.raises(ValueError, match="restaurar agora"):
+        lx.restaurar(item["id"])
+    monkeypatch.undo()
+    assert job.exists() and not enviado.exists()  # job voltou, upload ainda na lixeira...
+    assert [i["id"] for i in lx.listar()] == [item["id"]]  # ...e o item não é tratado como fantasma
+    lx.restaurar(item["id"])  # termina: traz só o upload
+    assert enviado.read_bytes() == b"video original" and lx.listar() == []

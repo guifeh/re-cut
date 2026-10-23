@@ -125,7 +125,11 @@ class Lixeira:
             try:
                 _mover_todos([(f, destino / f.name) for f in arquivos])
             except OSError as e:
-                shutil.rmtree(self.pasta / item["id"], ignore_errors=True)
+                if any(destino.iterdir()):  # a devolução não foi completa: o item fica, com o que estiver na lixeira
+                    self._registrar("excluido", item)
+                    raise ValueError(f"o corte foi movido só em parte ({e.strerror or e}); ele está na Lixeira, "
+                                     "restaure por lá quando o arquivo for liberado")
+                shutil.rmtree(self.pasta / item["id"], ignore_errors=True)  # nada ficou na lixeira: é seguro limpar
                 raise ValueError(f"não deu para mover o corte agora ({e.strerror or e}); feche o player e tente de novo")
             self._registrar("excluido", item)
             return item
@@ -149,7 +153,7 @@ class Lixeira:
 
     def _pasta_item(self, item_id):
         pasta = (self.pasta / item_id).resolve()
-        if not re.fullmatch(r"[\w-]+", item_id) or not pasta.is_relative_to(self.pasta.resolve()) \
+        if not re.fullmatch(r"[\w-]+", item_id) or item_id.startswith(APAGANDO) or not pasta.is_relative_to(self.pasta.resolve()) \
                 or not (pasta / "item.json").is_file():
             raise FileNotFoundError(item_id)
         return pasta
@@ -160,31 +164,49 @@ class Lixeira:
     def listar(self):
         self.expirar()
         itens = []
-        for f in self.pasta.glob("*/item.json"):
+        for f in self._itens_json():
             try:
-                itens.append(json.loads(f.read_text(encoding="utf-8")))
+                item = json.loads(f.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
+            if self._fantasma(item, f.parent):
+                self._tirar_da_lista(f.parent)
+                continue
+            itens.append(item)
         return sorted(itens, key=lambda i: i["excluido_em"], reverse=True)
+
+    def _itens_json(self):
+        return [f for f in self.pasta.glob("*/item.json") if not f.parent.name.startswith(APAGANDO)]
+
+    def _fantasma(self, item, pasta):
+        """item.json gravado mas o processo caiu antes de mover: os arquivos continuam no lugar original.
+        Só é fantasma se não sobrou nada na pasta do item (um item parcial guarda a única cópia de algo)."""
+        if item["tipo"] == "video":
+            return not (pasta / "job").exists() and not any((pasta / "upload").glob("*"))                 and (self.jobs / item["job_id"]).is_dir()
+        guardados = pasta / "corte"
+        return not any(guardados.glob("*")) and all((self.jobs / item["pasta"] / n).exists() for n in item["arquivos"])
 
     def restaurar(self, item_id):
         with self.lock:
             pasta, item = self._pasta_item(item_id), self.item(item_id)
             if item["tipo"] == "video":
                 destino = self.jobs / item["job_id"]
-                if destino.exists():
-                    raise ValueError("já existe um vídeo com esse id fora da lixeira")
-                movimentos = [(pasta / "job", destino)]
-                upload, dono_do_upload = self._upload_para_restaurar(pasta)
+                movimentos = []
+                if (pasta / "job").exists():  # num item parcial o job pode já ter voltado; falta só o upload
+                    if destino.exists():
+                        raise ValueError("já existe um vídeo com esse id fora da lixeira")
+                    movimentos.append((pasta / "job", destino))
+                upload, dono_do_upload = self._upload_para_restaurar(pasta, destino)
                 if upload:
                     movimentos.append(upload)
             else:
                 destino = self.jobs / item["pasta"]
                 if not destino.is_dir():
                     raise ValueError("o vídeo deste corte também foi excluído; restaure o vídeo antes")
-                if any((destino / nome).exists() for nome in item["arquivos"]):
+                na_lixeira = [n for n in item["arquivos"] if (pasta / "corte" / n).exists()]
+                if any((destino / nome).exists() for nome in na_lixeira):
                     raise ValueError("já existe um corte com esse nome no vídeo")
-                movimentos, dono_do_upload = [(pasta / "corte" / nome, destino / nome) for nome in item["arquivos"]], None
+                movimentos, dono_do_upload = [(pasta / "corte" / n, destino / n) for n in na_lixeira], None
             self.jobs.mkdir(parents=True, exist_ok=True)
             try:
                 _mover_todos(movimentos)  # tudo ou nada: se um falha, os já movidos voltam para a lixeira
@@ -198,14 +220,15 @@ class Lixeira:
             self._tirar_da_lista(pasta)
             return {**item, "restaurado_em": agora().isoformat(), "destino": str(destino)}
 
-    def _upload_para_restaurar(self, pasta):
+    def _upload_para_restaurar(self, pasta, destino):
         """((origem, destino), item.json de quem guarda) do arquivo enviado do vídeo, se ele não está em uploads/.
         Vem da própria pasta do item ou, quando dois vídeos usavam o mesmo upload, do outro vídeo excluído."""
-        meta = json.loads((pasta / "job" / "job.json").read_text(encoding="utf-8"))
+        meta_job = pasta / "job" / "job.json" if (pasta / "job").exists() else destino / "job.json"
+        meta = json.loads(meta_job.read_text(encoding="utf-8"))
         original = Path(meta.get("entrada", ""))
         if not original.name or original.exists() or not original.resolve().is_relative_to(self.uploads.resolve()):
             return None, None
-        for f in [pasta / "item.json", *self.pasta.glob("*/item.json")]:
+        for f in [pasta / "item.json", *self._itens_json()]:
             try:
                 dono = json.loads(f.read_text(encoding="utf-8"))
             except (OSError, ValueError):
@@ -234,7 +257,7 @@ class Lixeira:
         for resto in self.pasta.glob(APAGANDO + "*"):  # sobras de um apagar com arquivo aberto
             shutil.rmtree(resto, ignore_errors=True)
         vencidos = []
-        for f in list(self.pasta.glob("*/item.json")):
+        for f in self._itens_json():
             try:
                 item = json.loads(f.read_text(encoding="utf-8"))
                 if dt.datetime.fromisoformat(item["expira_em"]) <= momento:
@@ -257,7 +280,8 @@ class Lixeira:
 
 
 def _mover_todos(movimentos):
-    """Move (origem, destino) em ordem; se um falha, devolve os que já foram e repassa o erro."""
+    """Move (origem, destino) em ordem; se um falha, tenta devolver todos os que já foram (sem parar no primeiro
+    erro) e repassa o erro. Quem chama nunca pode apagar o que sobrou: pode ser a única cópia de um arquivo."""
     feitos = []
     try:
         for origem, destino in movimentos:
@@ -266,7 +290,10 @@ def _mover_todos(movimentos):
             feitos.append((origem, destino))
     except OSError:
         for origem, destino in reversed(feitos):
-            os.replace(destino, origem)
+            try:
+                os.replace(destino, origem)
+            except OSError:
+                pass  # fica onde está; o item continua listado e restaurável
         raise
 
 
