@@ -24,6 +24,7 @@ export type Job = {
   criado_em: string
   cortes: Corte[]
   log: string | string[]
+  reaplicando: boolean
 }
 
 export type Estrategia = { nome: string; texto: string }

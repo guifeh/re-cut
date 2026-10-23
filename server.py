@@ -25,7 +25,9 @@ DIST = RAIZ / "frontend" / "dist"
 PORTA = int(os.getenv("PORT", "8000"))
 MAX_UPLOAD = 20 * 1024 ** 3  # 20 GB
 
-processos = {}  # id -> Popen (só jobs desta execução do servidor)
+processos = {}  # id (ou id + REAPLICANDO) -> Popen; só os desta execução do servidor
+REAPLICANDO = ":reaplicar"  # chave à parte: reaplicar template não espera nem mexe no status do job (ex.: live rodando)
+CORTES_GLOB = "*_corte[0-9]*.json"
 lock = threading.Lock()
 
 
@@ -41,10 +43,11 @@ def resumo(job_dir, com_log=False):
     m = meta(job_dir)
     with lock:
         p = processos.get(m["id"])
+        m["reaplicando"] = m["id"] + REAPLICANDO in processos
     if m["status"] == "rodando" and p is None:  # servidor reiniciou no meio do job
         m["status"] = "interrompido"
     cortes = []
-    for f in job_dir.rglob("*_corte[0-9]*.json"):
+    for f in job_dir.rglob(CORTES_GLOB):
         c = json.loads(f.read_text(encoding="utf-8"))
         c["reaplicavel"] = c.pop("palavras", None) is not None  # cortes antigos não guardavam as palavras
         c.pop("fonte", None)
@@ -91,22 +94,26 @@ def criar_job(dados):
     return m
 
 
-def executar(job_dir, args, modo_log):
-    """Roda recut.py em subprocesso, com o log em log.txt e o status do job atualizado no fim."""
-    jid = job_dir.name
-    log = open(job_dir / "log.txt", modo_log, encoding="utf-8")
+def executar(job_dir, args, modo_log, chave=None):
+    """Roda recut.py em subprocesso com o log em log.txt. Sem `chave` é o job principal e o status é
+    atualizado no fim; com `chave` (reaplicação) o status do job não é tocado."""
+    jid = chave or job_dir.name
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
-    p = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, cwd=RAIZ, env=env)
-    with lock:
+    with lock:  # checar e registrar sob o mesmo lock: duas requisições juntas não disparam dois processos
+        if jid in processos:
+            raise ValueError("já existe uma reaplicação de template rodando nesse job; espere terminar")
+        log = open(job_dir / "log.txt", modo_log, encoding="utf-8")
+        p = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, cwd=RAIZ, env=env)
         processos[jid] = p
 
     def esperar():
         code = p.wait()
         log.close()
-        m2 = meta(job_dir)
-        if m2["status"] == "rodando":
-            m2["status"] = "concluido" if code == 0 else "erro"
-        salvar_meta(job_dir, m2)
+        if chave is None:
+            m2 = meta(job_dir)
+            if m2["status"] == "rodando":
+                m2["status"] = "concluido" if code == 0 else "erro"
+            salvar_meta(job_dir, m2)
         with lock:
             processos.pop(jid, None)
 
@@ -116,10 +123,10 @@ def executar(job_dir, args, modo_log):
 def aplicar_template(job_dir, dados):
     """apply_template do cut.pro: renderiza de novo cortes prontos com outro template, sem chamar a IA."""
     tpl = recut.carregar_template(str(dados.get("template", "")))
-    with lock:
-        if job_dir.name in processos:
-            raise ValueError("o job ainda está rodando; espere terminar ou pare antes")
-    pedidos = dados.get("cortes") or [f.relative_to(job_dir).as_posix() for f in job_dir.rglob("*_corte[0-9]*.json")]
+    pedidos = dados.get("cortes")
+    if pedidos is not None and not (isinstance(pedidos, list) and all(isinstance(x, str) for x in pedidos)):
+        raise ValueError("cortes deve ser uma lista de arquivos .json")
+    pedidos = pedidos or [f.relative_to(job_dir).as_posix() for f in job_dir.rglob(CORTES_GLOB)]
     arquivos = []
     for rel in pedidos:
         f = (job_dir / str(rel)).resolve()
@@ -128,12 +135,19 @@ def aplicar_template(job_dir, dados):
         arquivos.append(str(f))
     if not arquivos:
         raise ValueError("esse job não tem cortes")
-    m = meta(job_dir)
-    m["status"] = "rodando"
-    salvar_meta(job_dir, m)
     executar(job_dir, [sys.executable, "-u", str(RAIZ / "recut.py"), *arquivos, "--reaplicar",
-                       "--template", tpl["nome"]], "a")
-    return m
+                       "--template", tpl["nome"]], "a", chave=job_dir.name + REAPLICANDO)
+    return resumo(job_dir)
+
+
+def listar_templates():
+    lista = []
+    for f in sorted(recut.TEMPLATES.glob("*.json")):
+        try:
+            lista.append(recut.carregar_template(f.stem))
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"template ignorado ({f.name}): {e}", file=sys.stderr)
+    return lista
 
 
 def salvar_template(dados):
@@ -150,6 +164,9 @@ def salvar_template(dados):
 def parar_job(jid):
     with lock:
         p = processos.get(jid)
+        reaplicacao = processos.get(jid + REAPLICANDO)
+    if reaplicacao:
+        reaplicacao.terminate()
     job_dir = JOBS / jid
     m = meta(job_dir)
     m["status"] = "parado"
@@ -197,7 +214,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.json([{"nome": f.stem, "texto": f.read_text(encoding="utf-8").strip()}
                                   for f in sorted(recut.ESTRATEGIAS.glob("*.txt"))])
             if url.path == "/api/templates":
-                return self.json([recut.carregar_template(f.stem) for f in sorted(recut.TEMPLATES.glob("*.json"))])
+                return self.json(listar_templates())
             if url.path == "/api/templates/opcoes":
                 return self.json({"proporcoes": list(recut.PROPORCOES), "enquadramentos": list(recut.ENQUADRAMENTOS),
                                   "animacoes": list(recut.ANIMACOES), "fontes": list(recut.FONTES),

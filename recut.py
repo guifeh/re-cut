@@ -126,39 +126,51 @@ def normalizar_template(dados):
         elif k in t:
             t[k] = v
     t["nome"] = slug(str(t["nome"]))
+    t["descricao"] = str(t["descricao"])[:300]
     leg, tit, logo = t["legenda"], t["titulo"], t["logo"]
+    # (dict, campo, tipo, mínimo, máximo): o valor convertido substitui o enviado, então "6,0\nDialogue..."
+    # não passa como número nem entra cru na linha Style do ASS
+    numeros = [(t, "velocidade", float, 0.5, 2), (leg, "palavras_por_grupo", int, 1, 12), (leg, "pausa_max", float, 0, 5),
+               (leg, "tamanho", int, 20, 200), (leg, "contorno", int, 0, 20), (leg, "sombra", int, 0, 10),
+               (leg, "fundo_opacidade", int, 0, 100), (leg, "posicao_y", float, 0, 100), (tit, "segundos", float, 0, 60),
+               (tit, "tamanho", int, 20, 200), (tit, "posicao_y", float, 0, 100), (logo, "largura", float, 5, 60)]
+    for d, campo, tipo, minimo, maximo in numeros:
+        valor = d[campo]
+        if isinstance(valor, bool) or not isinstance(valor, (int, float)) or not minimo <= valor <= maximo:
+            raise ValueError(f"{campo.replace('_', ' ')} deve ser um número entre {minimo} e {maximo}")
+        d[campo] = tipo(valor)
+    for d, campo in [(leg, "ativa"), (leg, "respeitar_pontuacao"), (leg, "negrito"), (leg, "italico"),
+                     (leg, "maiusculas"), (leg, "fundo"), (leg, "destaque"), (tit, "ativo")]:
+        if not isinstance(d[campo], bool):
+            raise ValueError(f"{campo.replace('_', ' ')} deve ser verdadeiro ou falso")
     cores = (leg["cor"], leg["contorno_cor"], leg["fundo_cor"], leg["destaque_cor"], tit["cor"], tit["fundo_cor"])
-    try:
-        regras = [
-            (t["proporcao"] in PROPORCOES, f"proporção deve ser uma de {', '.join(PROPORCOES)}"),
-            (t["enquadramento"] in ENQUADRAMENTOS, f"enquadramento deve ser um de {', '.join(ENQUADRAMENTOS)}"),
-            (0.5 <= float(t["velocidade"]) <= 2, "velocidade entre 0.5 e 2"),
-            (leg["fonte"] in FONTES, f"fonte deve ser uma de {', '.join(FONTES)}"),
-            (leg["animacao"] in ANIMACOES, f"animação deve ser uma de {', '.join(ANIMACOES)}"),
-            (1 <= int(leg["palavras_por_grupo"]) <= 12, "palavras por grupo entre 1 e 12"),
-            (20 <= int(leg["tamanho"]) <= 200 and 20 <= int(tit["tamanho"]) <= 200, "tamanho da fonte entre 20 e 200"),
-            (0 <= float(leg["posicao_y"]) <= 100 and 0 <= float(tit["posicao_y"]) <= 100, "posição entre 0 e 100%"),
-            (0 <= float(leg["fundo_opacidade"]) <= 100, "opacidade do fundo entre 0 e 100"),
-            (all(re.fullmatch(r"#[0-9A-Fa-f]{6}", str(c)) for c in cores), "cores no formato #RRGGBB"),
-            (logo["posicao"] in POSICOES_LOGO and 5 <= float(logo["largura"]) <= 60, "logo: posição ou largura (5-60%) inválida"),
-        ]
-    except (TypeError, ValueError):
-        raise ValueError("template com valor numérico inválido")
+    regras = [
+        (t["proporcao"] in PROPORCOES, f"proporção deve ser uma de {', '.join(PROPORCOES)}"),
+        (t["enquadramento"] in ENQUADRAMENTOS, f"enquadramento deve ser um de {', '.join(ENQUADRAMENTOS)}"),
+        (leg["fonte"] in FONTES, f"fonte deve ser uma de {', '.join(FONTES)}"),
+        (leg["animacao"] in ANIMACOES, f"animação deve ser uma de {', '.join(ANIMACOES)}"),
+        (all(isinstance(c, str) and re.fullmatch(r"#[0-9A-Fa-f]{6}", c) for c in cores), "cores no formato #RRGGBB"),
+        (logo["posicao"] in POSICOES_LOGO, "posição do logo inválida"),
+        (isinstance(logo["arquivo"], str), "arquivo do logo inválido"),
+    ]
     for ok, msg in regras:
         if not ok:
             raise ValueError(msg)
-    t["velocidade"] = float(t["velocidade"])
     return t
 
 
-def carregar_template(nome, pasta=None):
+def carregar_template(nome):
     """Template salvo em templates/<nome>.json; vazio = padrão (o visual de antes dos templates)."""
     if not nome:
         return normalizar_template({})
-    arquivo = (pasta or TEMPLATES) / f"{slug(nome)}.json"
+    arquivo = TEMPLATES / f"{slug(nome)}.json"
     if not arquivo.is_file():
         raise ValueError(f"template '{nome}' não encontrado")
     return normalizar_template(json.loads(arquivo.read_text(encoding="utf-8")))
+
+
+def palavras_do_corte(palavras, inicio, fim):
+    return [w for w in palavras if w[0] >= inicio and w[1] <= fim]
 
 
 def cor_ass(hexa, opacidade=100):
@@ -211,7 +223,7 @@ def legenda_ass(palavras, inicio, fim, tpl=None, titulo=""):
         fim_tit = fim if not tit["segundos"] else min(fim, inicio + float(tit["segundos"]) * vel)
         eventos.append(f"Dialogue: 1,{t(inicio)},{t(fim_tit)},Titulo,,0,0,0,,{{{pos(tit['posicao_y'])}}}{limpar(titulo)}")
     if leg["ativa"]:
-        ws = [w for w in palavras if w[0] >= inicio and w[1] <= fim]
+        ws = palavras_do_corte(palavras, inicio, fim)
         grupos = agrupar_palavras(ws, int(leg["palavras_por_grupo"]), float(leg["pausa_max"]), leg["respeitar_pontuacao"])
         for n, g in enumerate(grupos):
             # segura o bloco até o próximo quando a pausa é curta, para a legenda não piscar entre frases
@@ -274,9 +286,9 @@ def comandos_crop(trajetoria, passo, iw, w, hz=10):
     return "\n".join(linhas) + "\n"
 
 
-def filtro_video(tpl, iw, ih, nome, enquadramento_x=None, com_logo=False):
-    """filter_complex do ffmpeg para o template. enquadramento_x: x fixo do recorte, ou None com
-    enquadramento 'rosto' (aí o x vem do arquivo <nome>.cmd via sendcmd)."""
+def filtro_video(tpl, iw, ih, nome, x=None, seguir=False, com_logo=False):
+    """filter_complex do ffmpeg para o template. x: posição do recorte (None = centro); com seguir=True
+    ele é só o primeiro quadro e o resto vem do arquivo <nome>.cmd via sendcmd."""
     W, H = PROPORCOES[tpl["proporcao"]]
     modo = tpl["enquadramento"]
     rec = recorte_vertical(iw / 2, iw, ih, W / H)
@@ -286,11 +298,10 @@ def filtro_video(tpl, iw, ih, nome, enquadramento_x=None, com_logo=False):
     elif rec is None:  # fonte mais estreita que o destino: corta a altura, centralizado
         h = int(iw * H / W) // 2 * 2
         v = f"[0:v]crop={iw}:{h}:0:{(ih - h) // 2},scale={W}:{H}"
-    elif modo == "rosto" and enquadramento_x is None:
-        v = f"[0:v]sendcmd=f={nome}.cmd,crop@rosto={rec[1]}:{ih}:{rec[0]}:0,scale={W}:{H}"
+    elif seguir:
+        v = f"[0:v]sendcmd=f={nome}.cmd,crop@rosto={rec[1]}:{ih}:{rec[0] if x is None else x}:0,scale={W}:{H}"
     else:
-        x = rec[0] if enquadramento_x is None else enquadramento_x
-        v = f"[0:v]crop={rec[1]}:{ih}:{x}:0,scale={W}:{H}"
+        v = f"[0:v]crop={rec[1]}:{ih}:{rec[0] if x is None else x}:0,scale={W}:{H}"
     if tpl["velocidade"] != 1:
         v += f",setpts=PTS/{tpl['velocidade']}"
     if tpl["legenda"]["ativa"] or tpl["titulo"]["ativo"]:
@@ -488,17 +499,18 @@ def renderizar(video, c, palavras, saida, nome, tpl=None):
     W, H = PROPORCOES[tpl["proporcao"]]
     dur, vel = c["fim"] - c["inicio"], tpl["velocidade"]
     modo = tpl["enquadramento"]
-    x_fixo = None
+    x, seguir = None, False
     if modo in ("rosto", "rosto_fixo"):
         xs, iw, ih = trajetoria_do_rosto(video, c["inicio"], c["fim"])
         rec = recorte_vertical(iw / 2, iw, ih, W / H)
         if rec:
             w = rec[1]
             trajetoria = suavizar_trajetoria(xs, iw / 2, zona_morta=0.06 * w)
-            if modo == "rosto":
+            seguir = modo == "rosto"
+            if seguir:
                 (saida / f"{nome}.cmd").write_text(comandos_crop(trajetoria, PASSO_ROSTO, iw, w), encoding="utf-8")
-            else:  # DisableCameraMotion: um enquadramento só, onde o rosto mais ficou
-                x_fixo = recorte_vertical(statistics.median(trajetoria), iw, ih, W / H)[0]
+            # rosto: x do primeiro quadro; rosto_fixo (DisableCameraMotion): onde o rosto mais ficou
+            x = recorte_vertical(trajetoria[0] if seguir else statistics.median(trajetoria), iw, ih, W / H)[0]
     else:
         iw, ih = tamanho_video(video)
     logo = tpl["logo"]["arquivo"]
@@ -510,7 +522,7 @@ def renderizar(video, c, palavras, saida, nome, tpl=None):
     args = [FFMPEG, "-v", "error", "-y", "-ss", f"{c['inicio']:.2f}", "-t", f"{dur:.2f}", "-i", str(Path(video).resolve())]
     if com_logo:
         args += ["-i", str(Path(logo).resolve())]
-    args += ["-filter_complex", filtro_video(tpl, iw, ih, nome, x_fixo, com_logo), "-map", "[out]", "-map", "0:a?"]
+    args += ["-filter_complex", filtro_video(tpl, iw, ih, nome, x, seguir, com_logo), "-map", "[out]", "-map", "0:a?"]
     if vel != 1:
         args += ["-af", f"atempo={vel}"]
     # cwd=saida: caminhos relativos nos filtros evitam o escape de "C:" no Windows
@@ -530,7 +542,25 @@ def reaplicar(arquivos, tpl):
         print(f"[{arq.stem}] aplicando template {tpl['nome']}")
         renderizar(Path(c["fonte"]), c, [tuple(w) for w in c["palavras"]], arq.parent, arq.stem, tpl)
         c["template"] = tpl["nome"]
+        c["duracao"] = round((c["fim"] - c["inicio"]) / tpl["velocidade"], 1)
         arq.write_text(json.dumps(c, ensure_ascii=False, indent=2), encoding="utf-8")
+        atualizar_indices(arq.parent, publico(c))
+
+
+def publico(c):
+    """O corte sem os campos internos (caminho local do vídeo e transcrição), para índices e webhook."""
+    return {k: v for k, v in c.items() if k not in ("fonte", "palavras")}
+
+
+def atualizar_indices(pasta, corte):
+    """Troca o corte nos índices da pasta (cortes.json da live, <fonte>_cortes.json do vídeo)."""
+    for idx in [pasta / "cortes.json", *pasta.glob("*_cortes.json")]:
+        if not idx.is_file():
+            continue
+        dados = json.loads(idx.read_text(encoding="utf-8"))
+        lista = dados["cortes"] if isinstance(dados, dict) else dados
+        lista[:] = [corte if x.get("arquivo") == corte["arquivo"] else x for x in lista]
+        idx.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def processar(video, saida, prefixo, cfg):
@@ -554,9 +584,9 @@ def processar(video, saida, prefixo, cfg):
              "criado_em": dt.datetime.now().isoformat(timespec="seconds"),
              # fonte + palavras permitem reaplicar outro template depois sem transcrever de novo
              "fonte": str(Path(video).resolve()),
-             "palavras": [w for w in palavras if w[0] >= c["inicio"] and w[1] <= c["fim"]]}
+             "palavras": palavras_do_corte(palavras, c["inicio"], c["fim"])}
         (saida / f"{nome}.json").write_text(json.dumps(c, ensure_ascii=False, indent=2), encoding="utf-8")
-        feitos.append(c)
+        feitos.append(publico(c))
     return feitos
 
 
@@ -633,6 +663,8 @@ def main():
     except ValueError as e:
         sys.exit(str(e))
     if a.reaplicar:
+        if desconhecidos := [x for x in extras if x.startswith("-")]:
+            p.error(f"argumentos não reconhecidos: {' '.join(desconhecidos)}")
         return reaplicar([a.entrada, *extras], tpl)
     if extras:
         p.error(f"argumentos não reconhecidos: {' '.join(extras)}")

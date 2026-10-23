@@ -271,9 +271,11 @@ function EditorTemplate({ inicial, opcoes, onFechar, onSalvo }: {
                   </Campo>
                   <Faixa label={`Tamanho ${t.legenda.tamanho}`} min={20} max={200} valor={t.legenda.tamanho} onChange={(v) => leg('tamanho', v)} />
                   <Faixa label={`Posição vertical ${t.legenda.posicao_y}%`} min={5} max={95} valor={t.legenda.posicao_y} onChange={(v) => leg('posicao_y', v)} />
-                  <Faixa label={`Palavras por vez: ${t.legenda.palavras_por_grupo}`} min={1} max={8} valor={t.legenda.palavras_por_grupo} onChange={(v) => leg('palavras_por_grupo', v)} />
+                  <Faixa label={`Palavras por vez: ${t.legenda.palavras_por_grupo}`} min={1} max={12} valor={t.legenda.palavras_por_grupo} onChange={(v) => leg('palavras_por_grupo', v)} />
                   <Cor label="Cor do texto" valor={t.legenda.cor} onChange={(v) => leg('cor', v)} />
+                  <Faixa label={`Pausa que quebra o bloco: ${t.legenda.pausa_max}s`} min={0} max={2} step={0.1} valor={t.legenda.pausa_max} onChange={(v) => leg('pausa_max', v)} />
                   <Liga label="Negrito" valor={t.legenda.negrito} onChange={(v) => leg('negrito', v)} />
+                  <Liga label="Itálico" valor={t.legenda.italico} onChange={(v) => leg('italico', v)} />
                   <Liga label="MAIÚSCULAS" valor={t.legenda.maiusculas} onChange={(v) => leg('maiusculas', v)} />
                   <Liga label="Quebrar no fim da frase" valor={t.legenda.respeitar_pontuacao} onChange={(v) => leg('respeitar_pontuacao', v)} />
                   <Liga label="Destacar a palavra falada" valor={t.legenda.destaque} onChange={(v) => leg('destaque', v)} />
@@ -287,7 +289,8 @@ function EditorTemplate({ inicial, opcoes, onFechar, onSalvo }: {
                   ) : (
                     <>
                       <Cor label="Cor do contorno" valor={t.legenda.contorno_cor} onChange={(v) => leg('contorno_cor', v)} />
-                      <Faixa label={`Contorno ${t.legenda.contorno}`} min={0} max={14} valor={t.legenda.contorno} onChange={(v) => leg('contorno', v)} />
+                      <Faixa label={`Contorno ${t.legenda.contorno}`} min={0} max={20} valor={t.legenda.contorno} onChange={(v) => leg('contorno', v)} />
+                      <Faixa label={`Sombra ${t.legenda.sombra}`} min={0} max={10} valor={t.legenda.sombra} onChange={(v) => leg('sombra', v)} />
                     </>
                   )}
                 </>
@@ -299,7 +302,7 @@ function EditorTemplate({ inicial, opcoes, onFechar, onSalvo }: {
                 <>
                   <Faixa label={t.titulo.segundos ? `Aparece nos primeiros ${t.titulo.segundos}s` : 'Aparece o corte todo'} min={0} max={15} valor={t.titulo.segundos} onChange={(v) => tit('segundos', v)} />
                   <Faixa label={`Posição vertical ${t.titulo.posicao_y}%`} min={5} max={95} valor={t.titulo.posicao_y} onChange={(v) => tit('posicao_y', v)} />
-                  <Faixa label={`Tamanho ${t.titulo.tamanho}`} min={20} max={140} valor={t.titulo.tamanho} onChange={(v) => tit('tamanho', v)} />
+                  <Faixa label={`Tamanho ${t.titulo.tamanho}`} min={20} max={200} valor={t.titulo.tamanho} onChange={(v) => tit('tamanho', v)} />
                   <Cor label="Cor do texto" valor={t.titulo.cor} onChange={(v) => tit('cor', v)} />
                   <Cor label="Cor da faixa" valor={t.titulo.fundo_cor} onChange={(v) => tit('fundo_cor', v)} />
                 </>

@@ -49,7 +49,10 @@ def test_normalizar_template():
     assert t["nome"] == "meu-template" and t["legenda"]["cor"] == "#00FF00" and t["legenda"]["tamanho"] == 84
     assert "inexistente" not in t["legenda"] and "lixo" not in t
     for ruim in ({"proporcao": "3:2"}, {"legenda": {"cor": "vermelho"}}, {"legenda": {"fonte": "Montserrat"}},
-                 {"velocidade": 5}, {"legenda": {"tamanho": "grande"}}):
+                 {"velocidade": 5}, {"legenda": {"tamanho": "grande"}}, {"legenda": {"tamanho": "84\n"}},
+                 {"legenda": {"contorno": "6,0\nDialogue: 0,0:00:00.00,0:00:09.00,Legenda,,0,0,0,,X"}},
+                 {"legenda": {"pausa_max": "x"}}, {"titulo": {"segundos": None}}, {"legenda": {"negrito": "sim"}},
+                 {"legenda": {"tamanho": True}}):
         with pytest.raises(ValueError):
             normalizar_template(ruim)
 
@@ -63,8 +66,9 @@ def test_templates_do_repo_sao_validos():
 
 def test_filtro_video():
     base = normalizar_template({})
-    assert "sendcmd=f=c1.cmd,crop@rosto=606:1080" in filtro_video(base, 1920, 1080, "c1")
-    assert "crop=606:1080:100:0,scale=1080:1920" in filtro_video(base, 1920, 1080, "c1", enquadramento_x=100)
+    assert "sendcmd=f=c1.cmd,crop@rosto=606:1080:300:0" in filtro_video(base, 1920, 1080, "c1", x=300, seguir=True)
+    assert "crop=606:1080:100:0,scale=1080:1920" in filtro_video(base, 1920, 1080, "c1", x=100)
+    assert "crop=606:1080:657:0" in filtro_video(base, 1920, 1080, "c1")  # sem rosto: centro
     ajustar = filtro_video(normalizar_template({"enquadramento": "ajustar"}), 1920, 1080, "c1")
     assert "boxblur" in ajustar and ajustar.endswith("[out]")
     quadrado = filtro_video(normalizar_template({"proporcao": "1:1", "enquadramento": "centro"}), 1920, 1080, "c1")
@@ -154,3 +158,9 @@ def test_legenda_nao_pisca_em_pausa_curta():
     assert linhas == [["0:00:00.00", "0:00:01.00"],  # pausa de 0.2s: segura até "tres"
                       ["0:00:01.00", "0:00:01.40"],  # pausa de 3.6s: some
                       ["0:00:05.00", "0:00:05.40"]]
+
+
+def test_publico_tira_campos_internos():
+    from recut import publico
+    c = {"arquivo": "a.mp4", "nota": 7, "fonte": "C:/x/fonte.mp4", "palavras": [[0, 1, "oi"]]}
+    assert publico(c) == {"arquivo": "a.mp4", "nota": 7}
