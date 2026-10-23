@@ -19,6 +19,7 @@ from pathlib import Path
 RETENCAO_DIAS = int(os.getenv("RECUT_LIXEIRA_DIAS", "30"))
 EXTENSOES_CORTE = (".mp4", ".jpg", ".json", ".ass", ".cmd")  # tudo que renderizar() gera para um corte
 APAGANDO = ".apagando-"  # pasta renomeada antes do rmtree; sobra só se algum arquivo estava aberto
+IDADE_FANTASMA = dt.timedelta(minutes=1)  # item recém-gravado pode estar no meio de uma exclusão: não é fantasma
 
 
 def agora():
@@ -88,7 +89,7 @@ class Lixeira:
             try:
                 os.replace(job_dir, destino / "job")  # renomear a pasta: ou move tudo ou nada
             except OSError as e:
-                shutil.rmtree(destino, ignore_errors=True)
+                self._tirar_da_lista(destino)  # só item.json lá dentro: o replace da pasta é tudo ou nada
                 raise ValueError(f"não deu para mover o vídeo agora ({e.strerror or e}); feche o player e tente de novo")
             original = Path(job_meta.get("entrada", ""))
             # o arquivo enviado só vai junto se nenhum outro vídeo usa o mesmo upload (os cortes dele apontam para lá)
@@ -129,7 +130,7 @@ class Lixeira:
                     self._registrar("excluido", item)
                     raise ValueError(f"o corte foi movido só em parte ({e.strerror or e}); ele está na Lixeira, "
                                      "restaure por lá quando o arquivo for liberado")
-                shutil.rmtree(self.pasta / item["id"], ignore_errors=True)  # nada ficou na lixeira: é seguro limpar
+                self._tirar_da_lista(self.pasta / item["id"])  # nada ficou na lixeira
                 raise ValueError(f"não deu para mover o corte agora ({e.strerror or e}); feche o player e tente de novo")
             self._registrar("excluido", item)
             return item
@@ -169,9 +170,9 @@ class Lixeira:
                 item = json.loads(f.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            if self._fantasma(item, f.parent):
-                self._tirar_da_lista(f.parent)
-                continue
+            with self.lock:  # nunca no meio de uma exclusão/restauração (elas seguram o mesmo lock)
+                if self._fantasma(item, f.parent) and self._tirar_da_lista(f.parent):
+                    continue
             itens.append(item)
         return sorted(itens, key=lambda i: i["excluido_em"], reverse=True)
 
@@ -181,10 +182,11 @@ class Lixeira:
     def _fantasma(self, item, pasta):
         """item.json gravado mas o processo caiu antes de mover: os arquivos continuam no lugar original.
         Só é fantasma se não sobrou nada na pasta do item (um item parcial guarda a única cópia de algo)."""
+        if agora() - dt.datetime.fromisoformat(item["excluido_em"]) < IDADE_FANTASMA:
+            return False
         if item["tipo"] == "video":
-            return not (pasta / "job").exists() and not any((pasta / "upload").glob("*"))                 and (self.jobs / item["job_id"]).is_dir()
-        guardados = pasta / "corte"
-        return not any(guardados.glob("*")) and all((self.jobs / item["pasta"] / n).exists() for n in item["arquivos"])
+            return not (pasta / "job").exists() and (self.jobs / item["job_id"]).is_dir()
+        return all((self.jobs / item["pasta"] / n).exists() for n in item["arquivos"])
 
     def restaurar(self, item_id):
         with self.lock:
@@ -199,6 +201,8 @@ class Lixeira:
                 upload, dono_do_upload = self._upload_para_restaurar(pasta, destino)
                 if upload:
                     movimentos.append(upload)
+                elif any((pasta / "upload").glob("*")):  # a cópia da lixeira não tem para onde voltar: não descarta
+                    raise ValueError("já existe um arquivo enviado com o mesmo nome em uploads/")
             else:
                 destino = self.jobs / item["pasta"]
                 if not destino.is_dir():
@@ -269,7 +273,11 @@ class Lixeira:
 
     @staticmethod
     def _tirar_da_lista(pasta):
-        """Some da lista de uma vez (renomeia) e depois apaga; o que não sair agora a próxima limpeza tira."""
+        """Tira da lista a pasta de um item que já não guarda nada (só item.json e pastas vazias).
+        Regra de segurança: se sobrou QUALQUER arquivo, não mexe e devolve False. Só apagar() e a expiração
+        apagam conteúdo da lixeira; todo o resto passa por aqui."""
+        if any(f.is_file() and f.name != "item.json" for f in pasta.rglob("*")):
+            return False
         fora = pasta.with_name(APAGANDO + pasta.name)
         try:
             os.replace(pasta, fora)
@@ -277,6 +285,7 @@ class Lixeira:
             fora = pasta
             (pasta / "item.json").unlink(missing_ok=True)
         shutil.rmtree(fora, ignore_errors=True)
+        return True
 
 
 def _mover_todos(movimentos):

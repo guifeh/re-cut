@@ -180,12 +180,13 @@ def excluir_corte(job_dir, dados):
     if not isinstance(rel, str) or not f.is_relative_to(job_dir.resolve()) or not f.is_file() \
             or not re.search(r"_corte\d+\.json$", f.name):
         raise ValueError(f"corte inválido: {rel}")
-    with lock:  # a live pode seguir gerando cortes; só não dá para excluir no meio de uma reaplicação de template
-        if job_dir.name + REAPLICANDO in processos:
-            raise ValueError("há uma reaplicação de template rodando nesse vídeo; espere terminar")
-        item = lixeira.excluir_corte(f)
-    recut.atualizar_indices(f.parent)
-    return item
+    try:
+        with lock:  # a live pode seguir gerando cortes; só não dá para excluir no meio de uma reaplicação de template
+            if job_dir.name + REAPLICANDO in processos:
+                raise ValueError("há uma reaplicação de template rodando nesse vídeo; espere terminar")
+            return lixeira.excluir_corte(f)
+    finally:  # também quando o corte foi movido só em parte: o índice reflete o que está no disco
+        recut.atualizar_indices(f.parent)
 
 
 def restaurar(item_id):

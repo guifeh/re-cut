@@ -168,12 +168,14 @@ def test_upload_compartilhado_volta_com_o_video_restaurado(ambiente):
 
 def test_item_fantasma_some_da_lista(ambiente, monkeypatch):
     lx, job, _ = ambiente
+    monkeypatch.setattr(lixeira, "IDADE_FANTASMA", dt.timedelta(0))  # na vida real só depois de 1 min
     # o processo "cai" logo depois de gravar item.json: nada é movido
+    os_replace_original = lixeira.os.replace
     monkeypatch.setattr(lixeira.os, "replace", lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     for excluir in (lambda: lx.excluir_video(job), lambda: lx.excluir_corte(job / "fonte_corte01.json")):
         with pytest.raises(KeyboardInterrupt):
             excluir()
-    monkeypatch.undo()
+    monkeypatch.setattr(lixeira.os, "replace", os_replace_original)
     assert len(list(lx.pasta.glob("*/item.json"))) == 2  # dois fantasmas no disco
     assert lx.listar() == [] and (job / "fonte_corte01.mp4").exists()  # somem da lista; o vídeo segue intacto
     assert lx.historico() == []  # nada foi excluído de verdade, então nada no histórico
@@ -231,3 +233,51 @@ def test_video_restaurado_em_parte_termina_depois(ambiente, monkeypatch):
     assert [i["id"] for i in lx.listar()] == [item["id"]]  # ...e o item não é tratado como fantasma
     lx.restaurar(item["id"])  # termina: traz só o upload
     assert enviado.read_bytes() == b"video original" and lx.listar() == []
+
+
+def test_tirar_da_lista_nunca_apaga_arquivo(tmp_path):
+    pasta = tmp_path / "item"
+    (pasta / "corte").mkdir(parents=True)
+    (pasta / "item.json").write_text("{}")
+    (pasta / "corte" / "unica-copia.mp4").write_bytes(b"x")
+    assert lixeira.Lixeira._tirar_da_lista(pasta) is False and (pasta / "corte" / "unica-copia.mp4").exists()
+    (pasta / "corte" / "unica-copia.mp4").unlink()
+    assert lixeira.Lixeira._tirar_da_lista(pasta) is True and not pasta.exists()
+
+
+def test_listar_durante_exclusao_nao_apaga_o_video(ambiente, monkeypatch):
+    """A corrida da revisão: GET /api/lixeira chega entre gravar item.json e mover a pasta do vídeo."""
+    import threading
+    lx, job, _ = ambiente
+    monkeypatch.setattr(lixeira, "IDADE_FANTASMA", dt.timedelta(0))  # sem a folga de idade: testa só o lock
+    original, no_meio, segue = lixeira.os.replace, threading.Event(), threading.Event()
+
+    def replace(origem, destino):
+        if str(origem) == str(job):
+            no_meio.set()
+            segue.wait(5)
+        return original(origem, destino)
+    monkeypatch.setattr(lixeira.os, "replace", replace)
+    excluindo = threading.Thread(target=lx.excluir_video, args=(job,))
+    excluindo.start()
+    assert no_meio.wait(5)
+    listagem = []
+    listando = threading.Thread(target=lambda: listagem.append(lx.listar()))
+    listando.start()
+    listando.join(0.3)  # bloqueado no lock enquanto a exclusão não termina
+    segue.set()
+    excluindo.join(5)
+    listando.join(5)
+    item = listagem[0][0]
+    assert (lx.pasta / item["id"] / "job" / "fonte_corte01.mp4").exists()  # o vídeo está inteiro na lixeira
+    lx.restaurar(item["id"])
+    assert (job / "fonte_corte01.mp4").exists()
+
+
+def test_restaurar_com_upload_ja_existente_nao_descarta_a_copia(ambiente):
+    lx, job, enviado = ambiente
+    item = lx.excluir_video(job)
+    enviado.write_bytes(b"outro arquivo com o mesmo nome")
+    with pytest.raises(ValueError, match="mesmo nome em uploads"):
+        lx.restaurar(item["id"])
+    assert (lx.pasta / item["id"] / "upload" / enviado.name).read_bytes() == b"video original"
