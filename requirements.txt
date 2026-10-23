@@ -1,0 +1,5 @@
+av<19  # faster-whisper 1.2.1 passa metadata_errors, removido no av 19
+faster-whisper
+opencv-python-headless<5  # OpenCV 5 removeu CascadeClassifier (Haar)
+yt-dlp[default]  # inclui yt-dlp-ejs, que resolve o desafio JS do YouTube
+imageio-ffmpeg  # ffmpeg estático com libass e libx264
