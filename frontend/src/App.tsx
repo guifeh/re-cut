@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Clapperboard, Copy, Download, Film, Palette, Radio, Scissors, Sparkles, Square, Upload } from 'lucide-react'
+import { Clapperboard, Copy, Download, Film, Palette, Radio, Scissors, Sparkles, Square, Trash2, Upload } from 'lucide-react'
 import { api, jobDoCorte, parseHoras, upload, type Corte, type Estrategia, type Job, type Template } from '@/api'
+import { Confirmar, Lixeira, porDias, usePrazoLixeira } from '@/lixeira'
 import { PreviaTemplate, TIPO_MOMENTO, Templates } from '@/templates'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -81,6 +82,7 @@ export default function App() {
               <TabsTrigger value="cortes">Cortes {cortes.length > 0 && <Badge variant="secondary" className="ml-1">{cortes.length}</Badge>}</TabsTrigger>
               <TabsTrigger value="templates">Templates</TabsTrigger>
               <TabsTrigger value="estrategias">Estratégias</TabsTrigger>
+              <TabsTrigger value="lixeira"><Trash2 className="size-3.5" /> Lixeira</TabsTrigger>
             </TabsList>
 
             <TabsContent value="cortar" className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -94,6 +96,10 @@ export default function App() {
 
             <TabsContent value="templates" className="mt-6">
               <Templates templates={templates} onSalvo={(t) => setTemplates((l) => [...l.filter((x) => x.nome !== t.nome), t].sort((a, b) => a.nome.localeCompare(b.nome)))} />
+            </TabsContent>
+
+            <TabsContent value="lixeira" className="mt-6">
+              <Lixeira key={aba === 'lixeira' ? 'aberta' : 'fechada'} onMudou={atualizar} />
             </TabsContent>
 
             <TabsContent value="estrategias" className="mt-6">
@@ -304,6 +310,19 @@ function Campo({ label, valor, set, min, max, step = 1 }: { label: string; valor
 
 function ListaJobs({ jobs, onAtualizar, onAbrir }: { jobs: Job[] | null; onAtualizar: () => void; onAbrir: (c: Corte) => void }) {
   const [detalhe, setDetalhe] = useState<Job | null>(null)
+  const [excluindo, setExcluindo] = useState<Job | null>(null)
+  const prazo = usePrazoLixeira()
+
+  async function excluir(j: Job) {
+    try {
+      await api.excluirJob(j.id)
+      toast.success('Vídeo movido para a lixeira', { description: `Dá para restaurar pela aba Lixeira ${porDias(prazo)}.` })
+      setExcluindo(null)
+      onAtualizar()
+    } catch (e) {
+      toast.error((e as Error).message)
+    }
+  }
 
   async function parar(id: string) {
     await api.pararJob(id).then(() => toast('Job parado')).catch((e) => toast.error(e.message))
@@ -362,11 +381,31 @@ function ListaJobs({ jobs, onAtualizar, onAbrir }: { jobs: Job[] | null; onAtual
                 {j.status === 'rodando' && (
                   <Button variant="outline" size="sm" onClick={() => parar(j.id)}><Square className="size-3" /> Parar</Button>
                 )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto text-muted-foreground hover:text-destructive"
+                  disabled={j.status === 'rodando' || j.reaplicando}
+                  title={j.status === 'rodando' ? 'Pare o processamento antes de excluir' : 'Mover para a lixeira'}
+                  onClick={() => setExcluindo(j)}
+                >
+                  <Trash2 className="size-3" /> Excluir
+                </Button>
               </div>
             </CardContent>
           </Card>
         )
       })}
+
+      <Confirmar
+        aberto={excluindo !== null}
+        titulo="Mover o vídeo para a lixeira?"
+        descricao={`"${excluindo ? nomeEntrada(excluindo.entrada) : ''}" e seus ${excluindo?.cortes.length ?? 0} cortes vão para a lixeira. Dá para restaurar ${porDias(prazo)}; depois são apagados de vez.`}
+        acao="Mover para a lixeira"
+        perigo
+        onConfirmar={async () => { if (excluindo) await excluir(excluindo) }}
+        onFechar={() => setExcluindo(null)}
+      />
 
       <Dialog open={detalhe !== null} onOpenChange={(o) => !o && setDetalhe(null)}>
         <DialogContent className="sm:max-w-2xl">
@@ -409,6 +448,19 @@ function DialogCorte({ corte, templates, onFechar, onAplicado }: {
 }) {
   const [novo, setNovo] = useState('')
   const [aplicando, setAplicando] = useState(false)
+  const [excluir, setExcluir] = useState(false)
+  const prazo = usePrazoLixeira()
+  async function moverParaLixeira() {
+    if (!corte) return
+    try {
+      await api.excluirCorte(jobDoCorte(corte), corte.json)
+      toast.success('Corte movido para a lixeira', { description: `Dá para restaurar pela aba Lixeira ${porDias(prazo)}.` })
+      setExcluir(false)
+      onAplicado()
+    } catch (e) {
+      toast.error((e as Error).message)
+    }
+  }
   async function aplicar(todos: boolean) {
     if (!corte || !novo) return
     setAplicando(true)
@@ -468,6 +520,9 @@ function DialogCorte({ corte, templates, onFechar, onAplicado }: {
                 <Button render={<a href={corte.video_url} download />}>
                   <Download className="size-4" /> Baixar MP4
                 </Button>
+                <Button variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => setExcluir(true)}>
+                  <Trash2 className="size-4" /> Mover para a lixeira
+                </Button>
               </div>
               <div className="flex flex-col gap-2 rounded-lg border p-3">
                 <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -490,6 +545,15 @@ function DialogCorte({ corte, templates, onFechar, onAplicado }: {
           </div>
         )}
       </DialogContent>
+      <Confirmar
+        aberto={excluir}
+        titulo="Mover o corte para a lixeira?"
+        descricao={`"${corte?.titulo ?? ''}" vai para a lixeira. Dá para restaurar ${porDias(prazo)}; depois é apagado de vez.`}
+        acao="Mover para a lixeira"
+        perigo
+        onConfirmar={moverParaLixeira}
+        onFechar={() => setExcluir(false)}
+      />
     </Dialog>
   )
 }

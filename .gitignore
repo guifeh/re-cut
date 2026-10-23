@@ -31,3 +31,6 @@ Thumbs.db
 
 # sons de efeito: os padrão são gerados na primeira vez; os seus podem ter direitos de terceiros
 efeitos/
+
+# lixeira (safe-delete): vídeos e cortes excluídos e o registro de ações
+lixeira/

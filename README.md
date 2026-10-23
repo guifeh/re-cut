@@ -17,6 +17,7 @@ entrada ──► transcrição ──► análise ──► regra do lote ─�
 - **Análise:** a IA procura picos de energia, reações, setup e payoff, histórias com começo e fim e opiniões fortes. Cada linha da transcrição vai com a energia do áudio relativa à mediana.
 - **Templates de corte:** proporção (9:16, 1:1, 4:5, 16:9), enquadramento (seguir o rosto, rosto com câmera parada, centro ou vídeo inteiro sobre fundo desfocado), estilo da legenda (fonte, tamanho, cor, contorno ou caixa, maiúsculas, posição, palavras por vez, destaque da palavra falada, animação pop/fade), título de gancho, logo/marca d'água e velocidade. Escolhe-se um ao clipar (vídeo ou live) e dá para **reaplicar outro em cortes prontos** sem chamar a IA de novo. Modelado no editor do cut.pro (`AspectRatio`, `AutoCropping.FramingMode`, `SubtitleDisplayConfig`, `SubtitleSettings`, `HighlightStyle`, `Animation`, `Speed`). Vêm 5 prontos em `templates/`: `classico`, `destaque`, `caixa`, `podcast` e `impacto`.
 - **Efeitos automáticos:** na mesma análise, a IA marca dentro de cada corte os momentos de `risada`, `reacao`, `enfase`, `punchline` e `virada` (com intensidade de 1 a 3 e um emoji). O template decide o que acontece em cada tipo: **zoom no rosto** (punch-in rápido mirando a altura do rosto), **som** (efeitos em `efeitos/`), **emoji** (figurinha que salta na tela) e **flash** (clarão de transição). No cut.pro isso aparece como recursos do template (`auto_zoom`, `emojis`, efeitos sonoros da biblioteca); aqui as regras por tipo de momento ficam visíveis e editáveis. A biblioteca de sons é organizada por categoria em `efeitos/<categoria>/<nome>.wav|mp3`, como a do cut.pro; os padrão (`transicao/whoosh`, `impacto/boom`, `cartoon/pop`, `interface/ding`, `comedia/ba-dum-tss`) são gerados pelo ffmpeg na primeira vez. Para usar os seus, crie uma pasta de categoria em `efeitos/` (nomes em minúsculas, números e hífen; arquivos soltos na raiz entram como "geral") e escolha no template. O zoom mira o rosto no instante do momento em qualquer enquadramento.
+- **Lixeira (safe-delete):** excluir um corte ou um vídeo inteiro nunca apaga na hora: move para `lixeira/`, onde fica 30 dias (`RECUT_LIXEIRA_DIAS`) e pode ser restaurado. O vídeo vai com os cortes e com o arquivo enviado (se nenhum outro vídeo usar o mesmo upload). Cada ação (excluído, restaurado, apagado de vez, expirado) fica em `lixeira/registro.jsonl` com data, hora e o vídeo afetado, e aparece no histórico da aba Lixeira. Não dá para excluir um vídeo que ainda está processando.
 - **Estratégias:** instruções em linguagem natural ("foque em dicas práticas de até 60s") salvas em `estrategias/<nome>.txt` e reutilizadas.
 - **Enquadramento:** detecta o rosto a cada 0,5 s e move o recorte com suavização (mediana + zona morta + pan gradual).
 - **Eventos:** webhook opcional recebe `live_started`, `live_clips` (a cada lote) e `live_ended`.
@@ -61,7 +62,7 @@ npm run build
 python server.py                   # http://localhost:8000
 ```
 
-Abas **Cortar** (link, upload ou monitorar live, com a escolha do template), **Cortes** (grade ordenada pela nota, player, copiar descrição, baixar MP4, trocar o template do corte ou de todos do vídeo), **Templates** (galeria e editor com prévia animada) e **Estratégias**.
+Abas **Lixeira** (itens excluídos e histórico), **Cortar** (link, upload ou monitorar live, com a escolha do template), **Cortes** (grade ordenada pela nota, player, copiar descrição, baixar MP4, trocar o template do corte ou de todos do vídeo), **Templates** (galeria e editor com prévia animada) e **Estratégias**.
 
 Para desenvolver o frontend com hot reload: `python server.py` em um terminal e `npm run dev` em `frontend/` (o Vite encaminha `/api` e `/files` para a porta 8000).
 
@@ -90,6 +91,10 @@ Saída: para cada corte, `.mp4` (1080×1920), `.jpg` (thumbnail), `.json` (nota,
 | `GET`/`POST` | `/api/estrategias` | listar / salvar `{nome, texto}` |
 | `GET`/`POST` | `/api/templates` | listar / salvar um template (validado; logo só vindo de upload) |
 | `GET` | `/api/templates/opcoes` | proporções, enquadramentos, fontes, animações, tipos de momento, efeitos e o template padrão |
+| `POST` | `/api/jobs/{id}/excluir` | move o vídeo inteiro para a lixeira |
+| `POST` | `/api/jobs/{id}/cortes/excluir` | `{json}` move um corte para a lixeira |
+| `GET` | `/api/lixeira` · `/api/lixeira/registro` | itens na lixeira / histórico com data e hora |
+| `POST` | `/api/lixeira/{id}/restaurar` · `/api/lixeira/{id}/apagar` | restaura / apaga de vez |
 | `GET` | `/api/efeitos/sons` | sons disponíveis em `efeitos/` (gera os padrão na primeira vez) |
 | `POST` | `/api/jobs/{id}/aplicar_template` | `{template, cortes?}` renderiza de novo os cortes (todos, se `cortes` faltar) |
 | `GET` | `/api/agentes` | agentes de IA disponíveis |

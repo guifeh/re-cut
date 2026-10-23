@@ -30,6 +30,32 @@ export type Job = {
 
 export type Estrategia = { nome: string; texto: string }
 
+/** item da lixeira (safe-delete): vídeo inteiro ou um corte, guardado por 30 dias */
+export type ItemLixeira = {
+  id: string
+  tipo: 'video' | 'corte'
+  job_id: string
+  titulo: string
+  entrada: string
+  excluido_em: string
+  expira_em: string
+  tamanho: number
+  cortes?: number
+  nota?: number
+  thumb_url: string | null
+}
+
+/** linha do histórico da lixeira: o que aconteceu, quando e com qual vídeo */
+export type EventoLixeira = {
+  em: string
+  acao: 'excluido' | 'restaurado' | 'apagado' | 'expirado'
+  tipo: 'video' | 'corte'
+  item: string
+  titulo: string
+  entrada: string
+  job_id: string
+}
+
 export type TipoMomento = 'risada' | 'reacao' | 'enfase' | 'punchline' | 'virada'
 export type Efeito = 'zoom' | 'som' | 'emoji' | 'flash'
 /** momento marcado pela IA dentro do corte; t em segundos do vídeo de origem */
@@ -122,6 +148,12 @@ export const api = {
   templates: () => req<Template[]>('/api/templates'),
   opcoesTemplate: () => req<OpcoesTemplate>('/api/templates/opcoes'),
   sons: () => req<Som[]>('/api/efeitos/sons'),
+  excluirJob: (id: string) => post<ItemLixeira>(`/api/jobs/${id}/excluir`, {}),
+  excluirCorte: (jobId: string, json: string) => post<ItemLixeira>(`/api/jobs/${jobId}/cortes/excluir`, { json }),
+  lixeira: () => req<{ retencao_dias: number; itens: ItemLixeira[] }>('/api/lixeira'),
+  registroLixeira: () => req<EventoLixeira[]>('/api/lixeira/registro'),
+  restaurar: (id: string) => post<ItemLixeira>(`/api/lixeira/${id}/restaurar`, {}),
+  apagarDeVez: (id: string) => post<ItemLixeira>(`/api/lixeira/${id}/apagar`, {}),
   salvarTemplate: (t: Template) => post<Template>('/api/templates', t),
   aplicarTemplate: (jobId: string, template: string, cortes?: string[]) =>
     post<Job>(`/api/jobs/${jobId}/aplicar_template`, { template, cortes }),
