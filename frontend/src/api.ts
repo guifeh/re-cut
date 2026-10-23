@@ -11,6 +11,9 @@ export type Corte = {
   criado_em: string
   video_url: string
   thumb_url: string
+  json: string
+  template?: string
+  reaplicavel: boolean
 }
 
 export type Job = {
@@ -25,6 +28,47 @@ export type Job = {
 
 export type Estrategia = { nome: string; texto: string }
 
+export type Template = {
+  nome: string
+  descricao: string
+  proporcao: '9:16' | '1:1' | '4:5' | '16:9'
+  enquadramento: 'rosto' | 'rosto_fixo' | 'centro' | 'ajustar'
+  velocidade: number
+  legenda: {
+    ativa: boolean
+    palavras_por_grupo: number
+    pausa_max: number
+    respeitar_pontuacao: boolean
+    fonte: string
+    tamanho: number
+    negrito: boolean
+    italico: boolean
+    maiusculas: boolean
+    cor: string
+    contorno_cor: string
+    contorno: number
+    sombra: number
+    fundo: boolean
+    fundo_cor: string
+    fundo_opacidade: number
+    destaque: boolean
+    destaque_cor: string
+    posicao_y: number
+    animacao: 'nenhuma' | 'pop' | 'fade'
+  }
+  titulo: { ativo: boolean; segundos: number; tamanho: number; cor: string; fundo_cor: string; posicao_y: number }
+  logo: { arquivo: string; largura: number; posicao: 'topo-direita' | 'topo-esquerda' | 'base-direita' | 'base-esquerda' }
+}
+
+export type OpcoesTemplate = {
+  proporcoes: Template['proporcao'][]
+  enquadramentos: Template['enquadramento'][]
+  animacoes: Template['legenda']['animacao'][]
+  fontes: string[]
+  posicoes_logo: Template['logo']['posicao'][]
+  padrao: Template
+}
+
 export type NovoJob = {
   entrada: string
   monitorar: boolean
@@ -36,6 +80,7 @@ export type NovoJob = {
   dias?: number[]
   horas?: number[]
   webhook?: string
+  template?: string
 }
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
@@ -56,7 +101,15 @@ export const api = {
   estrategias: () => req<Estrategia[]>('/api/estrategias'),
   salvarEstrategia: (e: Estrategia) => post<Estrategia>('/api/estrategias', e),
   agentes: () => req<string[]>('/api/agentes'),
+  templates: () => req<Template[]>('/api/templates'),
+  opcoesTemplate: () => req<OpcoesTemplate>('/api/templates/opcoes'),
+  salvarTemplate: (t: Template) => post<Template>('/api/templates', t),
+  aplicarTemplate: (jobId: string, template: string, cortes?: string[]) =>
+    post<Job>(`/api/jobs/${jobId}/aplicar_template`, { template, cortes }),
 }
+
+/** id do job a partir da URL do corte (/files/jobs/<id>/...) */
+export const jobDoCorte = (c: Corte) => c.video_url.split('/')[3]
 
 /** XHR em vez de fetch para ter progresso do upload (vídeos de live são grandes). */
 export function upload(arquivo: File, onProgresso: (pct: number) => void) {

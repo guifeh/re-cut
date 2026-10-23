@@ -46,9 +46,13 @@ def resumo(job_dir, com_log=False):
     cortes = []
     for f in job_dir.rglob("*_corte[0-9]*.json"):
         c = json.loads(f.read_text(encoding="utf-8"))
+        c["reaplicavel"] = c.pop("palavras", None) is not None  # cortes antigos não guardavam as palavras
+        c.pop("fonte", None)
         rel = f.parent.relative_to(RAIZ).as_posix()
-        c["video_url"] = f"/files/{rel}/{c['arquivo']}"
-        c["thumb_url"] = f"/files/{rel}/{c['thumbnail']}"
+        versao = int(f.stat().st_mtime)
+        c["json"] = f.relative_to(job_dir).as_posix()
+        c["video_url"] = f"/files/{rel}/{c['arquivo']}?v={versao}"
+        c["thumb_url"] = f"/files/{rel}/{c['thumbnail']}?v={versao}"
         cortes.append(c)
     m["cortes"] = sorted(cortes, key=lambda c: -c["nota"])
     log = (job_dir / "log.txt").read_text(encoding="utf-8", errors="replace") if (job_dir / "log.txt").exists() else ""
@@ -64,6 +68,8 @@ def criar_job(dados):
         raise ValueError("arquivo local só pode vir de um upload")  # não deixa a API ler qualquer caminho do disco
     if dados.get("monitorar") and not re.match(r"https?://", entrada):
         raise ValueError("monitoramento precisa da URL do canal")
+    if dados.get("template"):
+        recut.carregar_template(dados["template"])  # ValueError se não existe ou é inválido
     jid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
     job_dir = JOBS / jid
     job_dir.mkdir(parents=True)
@@ -71,7 +77,8 @@ def criar_job(dados):
     if dados.get("monitorar"):
         args.append("--monitorar")
     for chave, flag in [("estrategia", "--estrategia"), ("nota_min", "--nota-min"), ("limite", "--limite-por-lote"),
-                        ("dur_min", "--dur-min"), ("dur_max", "--dur-max"), ("webhook", "--webhook")]:
+                        ("dur_min", "--dur-min"), ("dur_max", "--dur-max"), ("webhook", "--webhook"),
+                        ("template", "--template")]:
         if dados.get(chave) not in (None, ""):
             args += [flag, str(dados[chave])]
     for chave in ("dias", "horas"):
@@ -80,7 +87,14 @@ def criar_job(dados):
     m = {"id": jid, "entrada": entrada, "monitorar": bool(dados.get("monitorar")), "status": "rodando",
          "criado_em": time.strftime("%Y-%m-%dT%H:%M:%S"), "config": {k: v for k, v in dados.items() if k != "entrada"}}
     salvar_meta(job_dir, m)
-    log = open(job_dir / "log.txt", "w", encoding="utf-8")
+    executar(job_dir, args, "w")
+    return m
+
+
+def executar(job_dir, args, modo_log):
+    """Roda recut.py em subprocesso, com o log em log.txt e o status do job atualizado no fim."""
+    jid = job_dir.name
+    log = open(job_dir / "log.txt", modo_log, encoding="utf-8")
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     p = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, cwd=RAIZ, env=env)
     with lock:
@@ -97,7 +111,40 @@ def criar_job(dados):
             processos.pop(jid, None)
 
     threading.Thread(target=esperar, daemon=True).start()
+
+
+def aplicar_template(job_dir, dados):
+    """apply_template do cut.pro: renderiza de novo cortes prontos com outro template, sem chamar a IA."""
+    tpl = recut.carregar_template(str(dados.get("template", "")))
+    with lock:
+        if job_dir.name in processos:
+            raise ValueError("o job ainda está rodando; espere terminar ou pare antes")
+    pedidos = dados.get("cortes") or [f.relative_to(job_dir).as_posix() for f in job_dir.rglob("*_corte[0-9]*.json")]
+    arquivos = []
+    for rel in pedidos:
+        f = (job_dir / str(rel)).resolve()
+        if not f.is_relative_to(job_dir.resolve()) or not f.is_file() or not re.search(r"_corte\d+\.json$", f.name):
+            raise ValueError(f"corte inválido: {rel}")
+        arquivos.append(str(f))
+    if not arquivos:
+        raise ValueError("esse job não tem cortes")
+    m = meta(job_dir)
+    m["status"] = "rodando"
+    salvar_meta(job_dir, m)
+    executar(job_dir, [sys.executable, "-u", str(RAIZ / "recut.py"), *arquivos, "--reaplicar",
+                       "--template", tpl["nome"]], "a")
     return m
+
+
+def salvar_template(dados):
+    tpl = recut.normalizar_template(dados)
+    logo = tpl["logo"]["arquivo"]
+    if logo and not Path(logo).resolve().is_relative_to(UPLOADS.resolve()):
+        raise ValueError("o logo precisa vir de um upload")
+    recut.TEMPLATES.mkdir(exist_ok=True)
+    (recut.TEMPLATES / f"{tpl['nome']}.json").write_text(json.dumps(tpl, ensure_ascii=False, indent=2) + "\n",
+                                                        encoding="utf-8")
+    return tpl
 
 
 def parar_job(jid):
@@ -149,6 +196,12 @@ class Handler(SimpleHTTPRequestHandler):
             if url.path == "/api/estrategias":
                 return self.json([{"nome": f.stem, "texto": f.read_text(encoding="utf-8").strip()}
                                   for f in sorted(recut.ESTRATEGIAS.glob("*.txt"))])
+            if url.path == "/api/templates":
+                return self.json([recut.carregar_template(f.stem) for f in sorted(recut.TEMPLATES.glob("*.json"))])
+            if url.path == "/api/templates/opcoes":
+                return self.json({"proporcoes": list(recut.PROPORCOES), "enquadramentos": list(recut.ENQUADRAMENTOS),
+                                  "animacoes": list(recut.ANIMACOES), "fontes": list(recut.FONTES),
+                                  "posicoes_logo": list(recut.POSICOES_LOGO), "padrao": recut.TEMPLATE_PADRAO})
             if url.path == "/api/agentes":
                 return self.json([nome for nome, _ in recut.agentes_disponiveis(os.getenv("RECUT_AGENTE", ""))])
             if partes[0] == "files":
@@ -190,6 +243,10 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             if url.path == "/api/jobs":
                 return self.json(criar_job(self.corpo_json()), 201)
+            if partes[:2] == ["api", "jobs"] and len(partes) == 4 and partes[3] == "aplicar_template":
+                return self.json(aplicar_template(self.job_dir(partes[2]), self.corpo_json()))
+            if url.path == "/api/templates":
+                return self.json(salvar_template(self.corpo_json()), 201)
             if partes[:2] == ["api", "jobs"] and len(partes) == 4 and partes[3] == "parar":
                 self.job_dir(partes[2])
                 return self.json(parar_job(partes[2]))

@@ -1,0 +1,42 @@
+{
+  "nome": "destaque",
+  "descricao": "Palavra falada pintada de amarelo, fonte pesada e entrada com pop. Estilo dos cortes de podcast virais.",
+  "proporcao": "9:16",
+  "enquadramento": "rosto",
+  "velocidade": 1.0,
+  "legenda": {
+    "ativa": true,
+    "palavras_por_grupo": 3,
+    "pausa_max": 0.5,
+    "respeitar_pontuacao": true,
+    "fonte": "Arial Black",
+    "tamanho": 88,
+    "negrito": true,
+    "italico": false,
+    "maiusculas": true,
+    "cor": "#FFFFFF",
+    "contorno_cor": "#000000",
+    "contorno": 6,
+    "sombra": 2,
+    "fundo": false,
+    "fundo_cor": "#000000",
+    "fundo_opacidade": 70,
+    "destaque": true,
+    "destaque_cor": "#FFD700",
+    "posicao_y": 66,
+    "animacao": "pop"
+  },
+  "titulo": {
+    "ativo": false,
+    "segundos": 3,
+    "tamanho": 60,
+    "cor": "#000000",
+    "fundo_cor": "#FFFFFF",
+    "posicao_y": 14
+  },
+  "logo": {
+    "arquivo": "",
+    "largura": 18,
+    "posicao": "topo-direita"
+  }
+}

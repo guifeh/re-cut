@@ -10,6 +10,9 @@ A IA usa a sessão local de um agente CLI já logado (Claude Code, Codex ou Gemi
 RECUT_AGENTE=gemini (ou claude, codex) define o preferido; se um falhar, tenta os outros.
 
 --estrategia aceita texto livre ou o nome de um arquivo em estrategias/<nome>.txt (salva uma vez, reusa sempre).
+--template usa templates/<nome>.json (proporção, enquadramento, estilo da legenda, título, logo, velocidade).
+
+    python recut.py jobs/x/fonte_corte01.json jobs/x/fonte_corte02.json --reaplicar --template destaque
 """
 import argparse
 import datetime as dt
@@ -76,18 +79,35 @@ ESQUEMA = {
     "additionalProperties": False,
 }
 
-ASS_CABECALHO = """[Script Info]
-ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,84,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,6,2,2,60,60,520,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
+# Template de corte, no modelo do editor do cut.pro (Template -> AspectRatio, AutoCropping.FramingMode,
+# SubtitleDisplayConfig, SubtitleSettings{Style, Layout.Position, HighlightStyle, Animation}, Elements, Speed).
+TEMPLATES = Path(__file__).with_name("templates")
+PROPORCOES = {"9:16": (1080, 1920), "1:1": (1080, 1080), "4:5": (1080, 1350), "16:9": (1920, 1080)}
+ENQUADRAMENTOS = ("rosto", "rosto_fixo", "centro", "ajustar")  # track / track sem câmera / center / fit-slot
+ANIMACOES = ("nenhuma", "pop", "fade")
+# fontes que o libass acha no Windows via DirectWrite; uma fonte ausente vira Arial sem aviso
+FONTES = ("Arial", "Arial Black", "Impact", "Segoe UI Black", "Verdana", "Georgia", "Comic Sans MS", "Trebuchet MS")
+POSICOES_LOGO = ("topo-direita", "topo-esquerda", "base-direita", "base-esquerda")
+TEMPLATE_PADRAO = {
+    "nome": "classico",
+    "descricao": "",
+    "proporcao": "9:16",
+    "enquadramento": "rosto",
+    "velocidade": 1.0,
+    "legenda": {
+        "ativa": True, "palavras_por_grupo": 3, "pausa_max": 0.5, "respeitar_pontuacao": True,
+        "fonte": "Arial", "tamanho": 84, "negrito": True, "italico": False, "maiusculas": True,
+        "cor": "#FFFFFF", "contorno_cor": "#000000", "contorno": 6, "sombra": 2,
+        "fundo": False, "fundo_cor": "#000000", "fundo_opacidade": 70,
+        "destaque": False, "destaque_cor": "#FFD700",
+        "posicao_y": 73, "animacao": "nenhuma",
+    },
+    "titulo": {"ativo": False, "segundos": 3, "tamanho": 60, "cor": "#000000", "fundo_cor": "#FFFFFF", "posicao_y": 14},
+    "logo": {"arquivo": "", "largura": 18, "posicao": "topo-direita"},
+}
+_ASS_FORMATO = ("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
+                "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+                "Alignment, MarginL, MarginR, MarginV, Encoding")
 
 
 # ---------- funções puras (testadas em test_recut.py) ----------
@@ -97,20 +117,127 @@ def ts_ass(seg):
     return f"{cs // 360000}:{cs // 6000 % 60:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}"
 
 
-def legenda_ass(palavras, inicio, fim, por_linha=3):
-    """Legenda no ritmo da fala: blocos de N palavras, tempos relativos ao início do corte."""
-    ws = [w for w in palavras if w[0] >= inicio and w[1] <= fim]
-    linhas = []
-    for i in range(0, len(ws), por_linha):
-        g = ws[i:i + por_linha]
-        texto = " ".join(w[2] for w in g).upper().replace("{", "(").replace("}", ")")
-        linhas.append(f"Dialogue: 0,{ts_ass(g[0][0] - inicio)},{ts_ass(g[-1][1] - inicio)},Default,,0,0,0,,{texto}")
-    return ASS_CABECALHO + "\n".join(linhas) + "\n"
+def normalizar_template(dados):
+    """Mescla sobre o padrão e valida; levanta ValueError com a mensagem para o usuário."""
+    t = json.loads(json.dumps(TEMPLATE_PADRAO))
+    for k, v in (dados or {}).items():
+        if isinstance(t.get(k), dict) and isinstance(v, dict):
+            t[k].update({kk: vv for kk, vv in v.items() if kk in t[k]})
+        elif k in t:
+            t[k] = v
+    t["nome"] = slug(str(t["nome"]))
+    leg, tit, logo = t["legenda"], t["titulo"], t["logo"]
+    cores = (leg["cor"], leg["contorno_cor"], leg["fundo_cor"], leg["destaque_cor"], tit["cor"], tit["fundo_cor"])
+    try:
+        regras = [
+            (t["proporcao"] in PROPORCOES, f"proporção deve ser uma de {', '.join(PROPORCOES)}"),
+            (t["enquadramento"] in ENQUADRAMENTOS, f"enquadramento deve ser um de {', '.join(ENQUADRAMENTOS)}"),
+            (0.5 <= float(t["velocidade"]) <= 2, "velocidade entre 0.5 e 2"),
+            (leg["fonte"] in FONTES, f"fonte deve ser uma de {', '.join(FONTES)}"),
+            (leg["animacao"] in ANIMACOES, f"animação deve ser uma de {', '.join(ANIMACOES)}"),
+            (1 <= int(leg["palavras_por_grupo"]) <= 12, "palavras por grupo entre 1 e 12"),
+            (20 <= int(leg["tamanho"]) <= 200 and 20 <= int(tit["tamanho"]) <= 200, "tamanho da fonte entre 20 e 200"),
+            (0 <= float(leg["posicao_y"]) <= 100 and 0 <= float(tit["posicao_y"]) <= 100, "posição entre 0 e 100%"),
+            (0 <= float(leg["fundo_opacidade"]) <= 100, "opacidade do fundo entre 0 e 100"),
+            (all(re.fullmatch(r"#[0-9A-Fa-f]{6}", str(c)) for c in cores), "cores no formato #RRGGBB"),
+            (logo["posicao"] in POSICOES_LOGO and 5 <= float(logo["largura"]) <= 60, "logo: posição ou largura (5-60%) inválida"),
+        ]
+    except (TypeError, ValueError):
+        raise ValueError("template com valor numérico inválido")
+    for ok, msg in regras:
+        if not ok:
+            raise ValueError(msg)
+    t["velocidade"] = float(t["velocidade"])
+    return t
 
 
-def recorte_vertical(centro_x, iw, ih):
-    """(x, largura) do recorte 9:16 centrado no rosto, ou None se o vídeo já é vertical."""
-    w = int(ih * 9 / 16) // 2 * 2
+def carregar_template(nome, pasta=None):
+    """Template salvo em templates/<nome>.json; vazio = padrão (o visual de antes dos templates)."""
+    if not nome:
+        return normalizar_template({})
+    arquivo = (pasta or TEMPLATES) / f"{slug(nome)}.json"
+    if not arquivo.is_file():
+        raise ValueError(f"template '{nome}' não encontrado")
+    return normalizar_template(json.loads(arquivo.read_text(encoding="utf-8")))
+
+
+def cor_ass(hexa, opacidade=100):
+    """#RRGGBB -> &HAABBGGRR do ASS (alfa invertido: 00 = opaco)."""
+    r, g, b = hexa[1:3], hexa[3:5], hexa[5:7]
+    return f"&H{round(255 * (100 - opacidade) / 100):02X}{b}{g}{r}".upper()
+
+
+def agrupar_palavras(ws, por_grupo, pausa_max, pontuacao):
+    """Blocos de legenda: até N palavras, quebrando em pausa longa ou fim de frase (SubtitleDisplayConfig)."""
+    grupos, atual = [], []
+    for w in ws:
+        if atual and (len(atual) >= por_grupo or w[0] - atual[-1][1] > pausa_max):
+            grupos.append(atual)
+            atual = []
+        atual.append(w)
+        if pontuacao and re.search(r"[.!?…,;:]$", w[2]):
+            grupos.append(atual)
+            atual = []
+    return grupos + ([atual] if atual else [])
+
+
+def legenda_ass(palavras, inicio, fim, tpl=None, titulo=""):
+    """Legenda e título do corte no estilo do template; tempos relativos ao corte e ajustados à velocidade."""
+    tpl = tpl or normalizar_template({})
+    W, H = PROPORCOES[tpl["proporcao"]]
+    leg, tit, vel = tpl["legenda"], tpl["titulo"], tpl["velocidade"]
+    caixa = leg["fundo"]  # BorderStyle 3: caixa opaca atrás do texto em vez de contorno
+    borda = cor_ass(leg["fundo_cor"], leg["fundo_opacidade"]) if caixa else cor_ass(leg["contorno_cor"])
+    estilos = [
+        f"Style: Legenda,{leg['fonte']},{leg['tamanho']},{cor_ass(leg['cor'])},{cor_ass(leg['cor'])},{borda},"
+        f"{cor_ass('#000000', 60)},{-1 if leg['negrito'] else 0},{-1 if leg['italico'] else 0},0,0,100,100,0,0,"
+        f"{3 if caixa else 1},{12 if caixa else leg['contorno']},{0 if caixa else leg['sombra']},5,60,60,0,1",
+        f"Style: Titulo,{leg['fonte']},{tit['tamanho']},{cor_ass(tit['cor'])},{cor_ass(tit['cor'])},"
+        f"{cor_ass(tit['fundo_cor'])},{cor_ass(tit['fundo_cor'])},-1,0,0,0,100,100,0,0,3,14,0,5,80,80,0,1",
+    ]
+
+    def t(seg):
+        return ts_ass((seg - inicio) / vel)
+
+    def pos(y):
+        return f"\\an5\\pos({W // 2},{round(H * float(y) / 100)})"
+
+    def limpar(txt):
+        return (txt.upper() if leg["maiusculas"] else txt).replace("{", "(").replace("}", ")")
+
+    anim = {"nenhuma": "", "pop": "\\fscx70\\fscy70\\t(0,90,\\fscx100\\fscy100)", "fade": "\\fad(120,0)"}[leg["animacao"]]
+    eventos = []
+    if tit["ativo"] and titulo:
+        fim_tit = fim if not tit["segundos"] else min(fim, inicio + float(tit["segundos"]) * vel)
+        eventos.append(f"Dialogue: 1,{t(inicio)},{t(fim_tit)},Titulo,,0,0,0,,{{{pos(tit['posicao_y'])}}}{limpar(titulo)}")
+    if leg["ativa"]:
+        ws = [w for w in palavras if w[0] >= inicio and w[1] <= fim]
+        grupos = agrupar_palavras(ws, int(leg["palavras_por_grupo"]), float(leg["pausa_max"]), leg["respeitar_pontuacao"])
+        for n, g in enumerate(grupos):
+            # segura o bloco até o próximo quando a pausa é curta, para a legenda não piscar entre frases
+            prox = grupos[n + 1][0][0] if n + 1 < len(grupos) else None
+            fim_g = prox if prox is not None and prox - g[-1][1] <= float(leg["pausa_max"]) else g[-1][1]
+            if not leg["destaque"]:
+                texto = " ".join(limpar(w[2]) for w in g)
+                eventos.append(f"Dialogue: 0,{t(g[0][0])},{t(fim_g)},Legenda,,0,0,0,,"
+                               f"{{{pos(leg['posicao_y'])}{anim}}}{texto}")
+                continue
+            # HighlightStyle: um evento por palavra falada, com ela pintada na cor de destaque
+            for i, w in enumerate(g):
+                fim_w = g[i + 1][0] if i + 1 < len(g) else fim_g
+                partes = [f"{{\\c{cor_ass(leg['destaque_cor'])}}}{limpar(x[2])}{{\\c{cor_ass(leg['cor'])}}}" if j == i
+                          else limpar(x[2]) for j, x in enumerate(g)]
+                eventos.append(f"Dialogue: 0,{t(w[0])},{t(fim_w)},Legenda,,0,0,0,,"
+                               f"{{{pos(leg['posicao_y'])}{anim if i == 0 else ''}}}{' '.join(partes)}")
+    return (f"[Script Info]\nScriptType: v4.00+\nPlayResX: {W}\nPlayResY: {H}\nWrapStyle: 0\n\n"
+            f"[V4+ Styles]\n{_ASS_FORMATO}\n" + "\n".join(estilos) +
+            "\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" +
+            "\n".join(eventos) + "\n")
+
+
+def recorte_vertical(centro_x, iw, ih, ar=9 / 16):
+    """(x, largura) do recorte na proporção `ar` (largura/altura) centrado no rosto, ou None se não cabe cortar."""
+    w = int(ih * ar) // 2 * 2
     if w >= iw:
         return None
     return int(min(max(centro_x - w / 2, 0), iw - w)), w
@@ -145,6 +272,36 @@ def comandos_crop(trajetoria, passo, iw, w, hz=10):
         cx = pts[i] + (pts[i + 1] - pts[i]) * min(1.0, t / passo - i)
         linhas.append(f"{t:.2f} crop@rosto x {int(min(max(cx - w / 2, 0), iw - w))};")
     return "\n".join(linhas) + "\n"
+
+
+def filtro_video(tpl, iw, ih, nome, enquadramento_x=None, com_logo=False):
+    """filter_complex do ffmpeg para o template. enquadramento_x: x fixo do recorte, ou None com
+    enquadramento 'rosto' (aí o x vem do arquivo <nome>.cmd via sendcmd)."""
+    W, H = PROPORCOES[tpl["proporcao"]]
+    modo = tpl["enquadramento"]
+    rec = recorte_vertical(iw / 2, iw, ih, W / H)
+    if modo == "ajustar":  # fit-slot: vídeo inteiro sobre o próprio vídeo desfocado
+        v = (f"[0:v]split[a][b];[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=20:2[bg];"
+             f"[b]scale={W}:{H}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2")
+    elif rec is None:  # fonte mais estreita que o destino: corta a altura, centralizado
+        h = int(iw * H / W) // 2 * 2
+        v = f"[0:v]crop={iw}:{h}:0:{(ih - h) // 2},scale={W}:{H}"
+    elif modo == "rosto" and enquadramento_x is None:
+        v = f"[0:v]sendcmd=f={nome}.cmd,crop@rosto={rec[1]}:{ih}:{rec[0]}:0,scale={W}:{H}"
+    else:
+        x = rec[0] if enquadramento_x is None else enquadramento_x
+        v = f"[0:v]crop={rec[1]}:{ih}:{x}:0,scale={W}:{H}"
+    if tpl["velocidade"] != 1:
+        v += f",setpts=PTS/{tpl['velocidade']}"
+    if tpl["legenda"]["ativa"] or tpl["titulo"]["ativo"]:
+        v += f",subtitles={nome}.ass"
+    if not com_logo:
+        return v + "[out]"
+    lw = round(W * float(tpl["logo"]["largura"]) / 100)
+    m = 40
+    x, y = {"topo-direita": (f"W-w-{m}", m), "topo-esquerda": (m, m),
+            "base-direita": (f"W-w-{m}", f"H-h-{m}"), "base-esquerda": (m, f"H-h-{m}")}[tpl["logo"]["posicao"]]
+    return f"{v}[v];[1:v]scale={lw}:-1[lg];[v][lg]overlay={x}:{y}[out]"
 
 
 def energia_relativa(rms, inicio, fim):
@@ -318,26 +475,62 @@ def trajetoria_do_rosto(video, inicio, fim, passo=PASSO_ROSTO):
     return xs, iw, ih
 
 
-def renderizar(video, c, palavras, saida, nome):
-    dur = c["fim"] - c["inicio"]
-    xs, iw, ih = trajetoria_do_rosto(video, c["inicio"], c["fim"])
-    rec = recorte_vertical(iw / 2, iw, ih)
-    if rec:
-        w = rec[1]
-        trajetoria = suavizar_trajetoria(xs, iw / 2, zona_morta=0.06 * w)
-        (saida / f"{nome}.cmd").write_text(comandos_crop(trajetoria, PASSO_ROSTO, iw, w), encoding="utf-8")
-        x0 = recorte_vertical(trajetoria[0], iw, ih)[0]
-        vf = f"sendcmd=f={nome}.cmd,crop@rosto={w}:{ih}:{x0}:0,scale=1080:1920"
+def tamanho_video(video):
+    import cv2
+    cap = cv2.VideoCapture(str(video))
+    iw, ih = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+    return iw, ih
+
+
+def renderizar(video, c, palavras, saida, nome, tpl=None):
+    tpl = tpl or normalizar_template({})
+    W, H = PROPORCOES[tpl["proporcao"]]
+    dur, vel = c["fim"] - c["inicio"], tpl["velocidade"]
+    modo = tpl["enquadramento"]
+    x_fixo = None
+    if modo in ("rosto", "rosto_fixo"):
+        xs, iw, ih = trajetoria_do_rosto(video, c["inicio"], c["fim"])
+        rec = recorte_vertical(iw / 2, iw, ih, W / H)
+        if rec:
+            w = rec[1]
+            trajetoria = suavizar_trajetoria(xs, iw / 2, zona_morta=0.06 * w)
+            if modo == "rosto":
+                (saida / f"{nome}.cmd").write_text(comandos_crop(trajetoria, PASSO_ROSTO, iw, w), encoding="utf-8")
+            else:  # DisableCameraMotion: um enquadramento só, onde o rosto mais ficou
+                x_fixo = recorte_vertical(statistics.median(trajetoria), iw, ih, W / H)[0]
     else:
-        vf = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
-    (saida / f"{nome}.ass").write_text(legenda_ass(palavras, c["inicio"], c["fim"]), encoding="utf-8")
+        iw, ih = tamanho_video(video)
+    logo = tpl["logo"]["arquivo"]
+    com_logo = bool(logo) and Path(logo).is_file()
+    if logo and not com_logo:
+        print(f"  logo não encontrado ({logo}); seguindo sem logo", file=sys.stderr)
+    (saida / f"{nome}.ass").write_text(legenda_ass(palavras, c["inicio"], c["fim"], tpl, c.get("titulo", "")),
+                                       encoding="utf-8")
+    args = [FFMPEG, "-v", "error", "-y", "-ss", f"{c['inicio']:.2f}", "-t", f"{dur:.2f}", "-i", str(Path(video).resolve())]
+    if com_logo:
+        args += ["-i", str(Path(logo).resolve())]
+    args += ["-filter_complex", filtro_video(tpl, iw, ih, nome, x_fixo, com_logo), "-map", "[out]", "-map", "0:a?"]
+    if vel != 1:
+        args += ["-af", f"atempo={vel}"]
     # cwd=saida: caminhos relativos nos filtros evitam o escape de "C:" no Windows
-    subprocess.run([FFMPEG, "-v", "error", "-y", "-ss", f"{c['inicio']:.2f}", "-t", f"{dur:.2f}",
-                    "-i", str(Path(video).resolve()), "-vf", f"{vf},subtitles={nome}.ass",
-                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", f"{nome}.mp4"],
+    subprocess.run(args + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", f"{nome}.mp4"],
                    cwd=saida, check=True)
-    subprocess.run([FFMPEG, "-v", "error", "-y", "-ss", f"{dur / 2:.2f}", "-i", f"{nome}.mp4",
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-ss", f"{dur / vel / 2:.2f}", "-i", f"{nome}.mp4",
                     "-frames:v", "1", f"{nome}.jpg"], cwd=saida, check=True)
+
+
+def reaplicar(arquivos, tpl):
+    """Renderiza de novo cortes prontos com outro template (apply_template do cut.pro), sem chamar a IA."""
+    for arq in map(Path, arquivos):
+        c = json.loads(arq.read_text(encoding="utf-8"))
+        if "palavras" not in c or not Path(c.get("fonte", "")).is_file():
+            print(f"[{arq.stem}] sem palavras ou vídeo de origem salvos; gere o corte de novo", file=sys.stderr)
+            continue
+        print(f"[{arq.stem}] aplicando template {tpl['nome']}")
+        renderizar(Path(c["fonte"]), c, [tuple(w) for w in c["palavras"]], arq.parent, arq.stem, tpl)
+        c["template"] = tpl["nome"]
+        arq.write_text(json.dumps(c, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def processar(video, saida, prefixo, cfg):
@@ -355,9 +548,13 @@ def processar(video, saida, prefixo, cfg):
     for i, c in enumerate(cortes, 1):
         nome = f"{prefixo}_corte{i:02d}"
         print(f"[{prefixo}] {nome} nota {c['nota']:.1f}: {c['titulo']}")
-        renderizar(video, c, palavras, saida, nome)
-        c = {**c, "arquivo": f"{nome}.mp4", "thumbnail": f"{nome}.jpg", "lote": prefixo,
-             "duracao": round(c["fim"] - c["inicio"], 1), "criado_em": dt.datetime.now().isoformat(timespec="seconds")}
+        renderizar(video, c, palavras, saida, nome, cfg["template"])
+        c = {**c, "arquivo": f"{nome}.mp4", "thumbnail": f"{nome}.jpg", "lote": prefixo, "template": cfg["template"]["nome"],
+             "duracao": round((c["fim"] - c["inicio"]) / cfg["template"]["velocidade"], 1),
+             "criado_em": dt.datetime.now().isoformat(timespec="seconds"),
+             # fonte + palavras permitem reaplicar outro template depois sem transcrever de novo
+             "fonte": str(Path(video).resolve()),
+             "palavras": [w for w in palavras if w[0] >= c["inicio"] and w[1] <= c["fim"]]}
         (saida / f"{nome}.json").write_text(json.dumps(c, ensure_ascii=False, indent=2), encoding="utf-8")
         feitos.append(c)
     return feitos
@@ -426,13 +623,25 @@ def main():
     p.add_argument("--dias", type=lista_int, default=set(), help="dias para monitorar, 1=seg..7=dom (ex.: 1,2,3)")
     p.add_argument("--horas", type=lista_int, default=set(), help="horas para monitorar, 0-23 (ex.: 18,19,20)")
     p.add_argument("--webhook", default="", help="URL que recebe POST nos eventos live_started/live_clips/live_ended")
+    p.add_argument("--template", default="", help="nome de templates/<nome>.json (padrão: legenda clássica)")
+    p.add_argument("--reaplicar", action="store_true",
+                   help="entrada = um ou mais .json de cortes prontos; renderiza de novo com --template")
     p.add_argument("--saida", type=Path, default=Path("cortes"))
-    a = p.parse_args()
+    a, extras = p.parse_known_args()
+    try:
+        tpl = carregar_template(a.template)
+    except ValueError as e:
+        sys.exit(str(e))
+    if a.reaplicar:
+        return reaplicar([a.entrada, *extras], tpl)
+    if extras:
+        p.error(f"argumentos não reconhecidos: {' '.join(extras)}")
     if not agentes_disponiveis():
         sys.exit("Nenhum agente de IA encontrado. Instale e faça login no Claude Code (claude), no Codex (codex login) ou no Gemini CLI (gemini).")
     a.saida.mkdir(parents=True, exist_ok=True)
     cfg = {"estrategia": carregar_estrategia(a.estrategia), "nota_min": a.nota_min, "limite": a.limite_por_lote,
-           "dur_min": a.dur_min, "dur_max": a.dur_max, "dias": a.dias, "horas": a.horas, "webhook": a.webhook}
+           "dur_min": a.dur_min, "dur_max": a.dur_max, "dias": a.dias, "horas": a.horas, "webhook": a.webhook,
+           "template": tpl}
     if a.monitorar:
         monitorar(a.entrada, a.saida, cfg)
     else:

@@ -144,3 +144,14 @@
     --primary-foreground: oklch(0.16 0.02 28);
     --ring: oklch(0.72 0.19 28);
 }
+
+/* animações de entrada da legenda na prévia dos templates (o Tailwind 4 usa a propriedade translate,
+   então animar scale não briga com o -translate-x/y-1/2) */
+@keyframes pop {
+    from { scale: 0.7; }
+    to { scale: 1; }
+}
+@keyframes fadein {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
