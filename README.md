@@ -16,6 +16,7 @@ entrada ──► transcrição ──► análise ──► regra do lote ─�
 - **Lives:** espera o canal entrar ao vivo, grava em lotes de 10 minutos e corta cada lote assim que ele fecha, sem esperar a live terminar. Se a live cair e voltar em até 5 min, continua na mesma transmissão. Dá para limitar por dias da semana e horas.
 - **Análise:** a IA procura picos de energia, reações, setup e payoff, histórias com começo e fim e opiniões fortes. Cada linha da transcrição vai com a energia do áudio relativa à mediana.
 - **Templates de corte:** proporção (9:16, 1:1, 4:5, 16:9), enquadramento (seguir o rosto, rosto com câmera parada, centro ou vídeo inteiro sobre fundo desfocado), estilo da legenda (fonte, tamanho, cor, contorno ou caixa, maiúsculas, posição, palavras por vez, destaque da palavra falada, animação pop/fade), título de gancho, logo/marca d'água e velocidade. Escolhe-se um ao clipar (vídeo ou live) e dá para **reaplicar outro em cortes prontos** sem chamar a IA de novo. Modelado no editor do cut.pro (`AspectRatio`, `AutoCropping.FramingMode`, `SubtitleDisplayConfig`, `SubtitleSettings`, `HighlightStyle`, `Animation`, `Speed`). Vêm 5 prontos em `templates/`: `classico`, `destaque`, `caixa`, `podcast` e `impacto`.
+- **Efeitos automáticos:** na mesma análise, a IA marca dentro de cada corte os momentos de `risada`, `reacao`, `enfase`, `punchline` e `virada` (com intensidade de 1 a 3 e um emoji). O template decide o que acontece em cada tipo: **zoom no rosto** (punch-in rápido mirando a altura do rosto), **som** (efeitos em `efeitos/`), **emoji** (figurinha que salta na tela) e **flash** (clarão de transição). No cut.pro isso aparece como recursos do template (`auto_zoom`, `emojis`, efeitos sonoros da biblioteca); aqui as regras por tipo de momento ficam visíveis e editáveis. Os sons padrão (`whoosh`, `impacto`, `pop`, `ding`, `tambor`) são gerados pelo ffmpeg na primeira vez; para usar os seus, coloque `<nome>.wav` ou `.mp3` em `efeitos/` e escolha no template.
 - **Estratégias:** instruções em linguagem natural ("foque em dicas práticas de até 60s") salvas em `estrategias/<nome>.txt` e reutilizadas.
 - **Enquadramento:** detecta o rosto a cada 0,5 s e move o recorte com suavização (mediana + zona morta + pan gradual).
 - **Eventos:** webhook opcional recebe `live_started`, `live_clips` (a cada lote) e `live_ended`.
@@ -88,7 +89,8 @@ Saída: para cada corte, `.mp4` (1080×1920), `.jpg` (thumbnail), `.json` (nota,
 | `POST` | `/api/jobs/{id}/parar` | encerra o job |
 | `GET`/`POST` | `/api/estrategias` | listar / salvar `{nome, texto}` |
 | `GET`/`POST` | `/api/templates` | listar / salvar um template (validado; logo só vindo de upload) |
-| `GET` | `/api/templates/opcoes` | proporções, enquadramentos, fontes, animações e o template padrão |
+| `GET` | `/api/templates/opcoes` | proporções, enquadramentos, fontes, animações, tipos de momento, efeitos e o template padrão |
+| `GET` | `/api/efeitos/sons` | sons disponíveis em `efeitos/` (gera os padrão na primeira vez) |
 | `POST` | `/api/jobs/{id}/aplicar_template` | `{template, cortes?}` renderiza de novo os cortes (todos, se `cortes` faltar) |
 | `GET` | `/api/agentes` | agentes de IA disponíveis |
 | `GET` | `/files/jobs/...` | vídeos e thumbnails (com suporte a Range) |
@@ -112,4 +114,7 @@ Cobrem as partes de lógica: legendas, recorte, regra do lote, horários, estrat
 - Fontes dos templates: só as do sistema que o libass encontra (as do Windows na lista); uma fonte ausente vira Arial.
 - Cortes gerados antes dos templates não guardam as palavras, então não dá para trocar o template deles; gere de novo.
 - A prévia do editor é uma aproximação em CSS; o vídeo final é desenhado pelo ffmpeg/libass com as mesmas medidas.
+- Emojis saem em uma cor só (o libass não desenha emoji colorido): viram figurinha amarela com contorno.
+- Com zoom ativo o corte sai a 30 fps (o `zoompan` precisa de fps fixo).
+- Sem memes/imagens de terceiros: os efeitos são zoom, flash, emoji e sons próprios.
 - Corte só conteúdo sobre o qual você tem direitos.

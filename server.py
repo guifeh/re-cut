@@ -218,7 +218,10 @@ class Handler(SimpleHTTPRequestHandler):
             if url.path == "/api/templates/opcoes":
                 return self.json({"proporcoes": list(recut.PROPORCOES), "enquadramentos": list(recut.ENQUADRAMENTOS),
                                   "animacoes": list(recut.ANIMACOES), "fontes": list(recut.FONTES),
-                                  "posicoes_logo": list(recut.POSICOES_LOGO), "padrao": recut.TEMPLATE_PADRAO})
+                                  "posicoes_logo": list(recut.POSICOES_LOGO), "padrao": recut.TEMPLATE_PADRAO,
+                                  "tipos_momento": list(recut.TIPOS_MOMENTO), "efeitos": list(recut.EFEITOS)})
+            if url.path == "/api/efeitos/sons":
+                return self.json(recut.listar_sons())
             if url.path == "/api/agentes":
                 return self.json([nome for nome, _ in recut.agentes_disponiveis(os.getenv("RECUT_AGENTE", ""))])
             if partes[0] == "files":

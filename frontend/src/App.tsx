@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Clapperboard, Copy, Download, Film, Palette, Radio, Scissors, Sparkles, Square, Upload } from 'lucide-react'
 import { api, jobDoCorte, parseHoras, upload, type Corte, type Estrategia, type Job, type Template } from '@/api'
-import { PreviaTemplate, Templates } from '@/templates'
+import { PreviaTemplate, TIPO_MOMENTO, Templates } from '@/templates'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -441,6 +441,22 @@ function DialogCorte({ corte, templates, onFechar, onAplicado }: {
                 <span className="text-sm text-muted-foreground">/ 10 nota viral</span>
               </div>
               <p className="text-sm text-muted-foreground">{corte.motivo}</p>
+              {/* horário no vídeo do corte: a velocidade do template muda a escala (duracao = (fim-inicio)/velocidade) */}
+              {corte.momentos && corte.momentos.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs text-muted-foreground">Momentos marcados pela IA</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {corte.momentos.map((m) => (
+                      <span key={m.t} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs" title={TIPO_MOMENTO[m.tipo].dica}>
+                        <span>{m.emoji}</span>
+                        <span className="font-mono text-muted-foreground">{tempo(((m.t - corte.inicio) * corte.duracao) / (corte.fim - corte.inicio))}</span>
+                        {TIPO_MOMENTO[m.tipo].nome}
+                        <span className="text-primary">{'•'.repeat(m.intensidade)}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="flex flex-col gap-2">
                 <Label className="text-xs text-muted-foreground">Descrição do post</Label>
                 <p className="whitespace-pre-wrap rounded-md bg-muted p-3 text-sm">{legenda}</p>

@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { Copy, Pencil, Plus, Upload } from 'lucide-react'
-import { api, upload, type OpcoesTemplate, type Template } from '@/api'
+import { api, upload, type Efeito, type OpcoesTemplate, type Template, type TipoMomento } from '@/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -27,6 +27,14 @@ const POSICAO_LOGO: Record<Template['logo']['posicao'], string> = {
   'base-esquerda': 'Base esquerda',
 }
 const FRASE = ['esse', 'foi', 'o', 'melhor', 'momento', 'da', 'live']
+export const TIPO_MOMENTO: Record<TipoMomento, { nome: string; dica: string }> = {
+  risada: { nome: 'Risada', dica: 'alguém ri ou algo é claramente engraçado' },
+  reacao: { nome: 'Reação', dica: 'surpresa, choque, grito, susto' },
+  enfase: { nome: 'Ênfase', dica: 'frase de efeito, número ou afirmação forte' },
+  punchline: { nome: 'Punchline', dica: 'o desfecho de uma piada ou história' },
+  virada: { nome: 'Virada', dica: 'mudança brusca de assunto ou reviravolta' },
+}
+const EFEITO: Record<Efeito, string> = { zoom: 'Zoom no rosto', som: 'Som', emoji: 'Emoji', flash: 'Flash' }
 
 const hexA = (hex: string, opacidade: number) => `${hex}${Math.round((opacidade / 100) * 255).toString(16).padStart(2, '0')}`
 
@@ -176,6 +184,7 @@ export function Templates({ templates, onSalvo }: { templates: Template[]; onSal
                 <Badge variant="outline">{t.proporcao}</Badge>
               </div>
               <p className="line-clamp-3 text-xs text-muted-foreground">{t.descricao || ENQUADRAMENTO[t.enquadramento]}</p>
+              {t.efeitos.ativo && <Badge variant="secondary" className="self-start">efeitos automáticos</Badge>}
               <div className="mt-auto flex gap-1">
                 <Button variant="ghost" size="sm" onClick={() => setEditando(copiar(t))}><Pencil className="size-3" /> Editar</Button>
                 <Button variant="ghost" size="sm" onClick={() => setEditando({ ...copiar(t), nome: `${t.nome}-copia` })}><Copy className="size-3" /> Duplicar</Button>
@@ -211,6 +220,15 @@ function EditorTemplate({ inicial, opcoes, onFechar, onSalvo }: {
   const leg = <K extends keyof Template['legenda']>(k: K, v: Template['legenda'][K]) => setT((x) => ({ ...x, legenda: { ...x.legenda, [k]: v } }))
   const tit = <K extends keyof Template['titulo']>(k: K, v: Template['titulo'][K]) => setT((x) => ({ ...x, titulo: { ...x.titulo, [k]: v } }))
   const logo = <K extends keyof Template['logo']>(k: K, v: Template['logo'][K]) => setT((x) => ({ ...x, logo: { ...x.logo, [k]: v } }))
+  const efe = <K extends keyof Template['efeitos']>(k: K, v: Template['efeitos'][K]) => setT((x) => ({ ...x, efeitos: { ...x.efeitos, [k]: v } }))
+  const [sons, setSons] = useState<string[]>([])
+  useEffect(() => {
+    api.sons().then(setSons).catch(() => {})
+  }, [])
+  const alternarEfeito = (tipo: TipoMomento, e: Efeito) => {
+    const atuais = t.efeitos.regras[tipo] ?? []
+    efe('regras', { ...t.efeitos.regras, [tipo]: atuais.includes(e) ? atuais.filter((x) => x !== e) : [...atuais, e] })
+  }
 
   async function enviarLogo(f: File | undefined) {
     if (!f) return
@@ -306,6 +324,52 @@ function EditorTemplate({ inicial, opcoes, onFechar, onSalvo }: {
                   <Cor label="Cor do texto" valor={t.titulo.cor} onChange={(v) => tit('cor', v)} />
                   <Cor label="Cor da faixa" valor={t.titulo.fundo_cor} onChange={(v) => tit('fundo_cor', v)} />
                 </>
+              )}
+            </Secao>
+
+            <Secao titulo="Efeitos automáticos" chave={<Switch checked={t.efeitos.ativo} onCheckedChange={(v) => efe('ativo', v)} />}>
+              {t.efeitos.ativo ? (
+                <>
+                  <p className="text-xs text-muted-foreground sm:col-span-2">
+                    A IA marca os momentos de cada corte; aqui você escolhe o que acontece em cada tipo.
+                  </p>
+                  <Faixa label={`Só momentos com intensidade ${t.efeitos.intensidade_min}+ (de 3)`} min={1} max={3} valor={t.efeitos.intensidade_min} onChange={(v) => efe('intensidade_min', v)} />
+                  <Faixa label={`Força do zoom ${t.efeitos.zoom.toFixed(2)}x`} min={1.05} max={2} step={0.05} valor={t.efeitos.zoom} onChange={(v) => efe('zoom', v)} />
+                  <div className="flex flex-col gap-2 sm:col-span-2">
+                    {opcoes.tipos_momento.map((tipo) => {
+                      const ativos = t.efeitos.regras[tipo] ?? []
+                      return (
+                        <div key={tipo} className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2">
+                          <div className="mr-auto min-w-36">
+                            <div className="text-sm font-medium">{TIPO_MOMENTO[tipo].nome}</div>
+                            <div className="text-xs text-muted-foreground">{TIPO_MOMENTO[tipo].dica}</div>
+                          </div>
+                          {opcoes.efeitos.map((e) => (
+                            <button
+                              key={e}
+                              type="button"
+                              onClick={() => alternarEfeito(tipo, e)}
+                              className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${ativos.includes(e) ? 'border-primary bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                            >
+                              {EFEITO[e]}
+                            </button>
+                          ))}
+                          {ativos.includes('som') && sons.length > 0 && (
+                            <div className="w-32">
+                              <Escolha
+                                valor={t.efeitos.sons[tipo] ?? sons[0]}
+                                itens={sons.map((s) => [s, s])}
+                                onChange={(v) => efe('sons', { ...t.efeitos.sons, [tipo]: v })}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground sm:col-span-2">Zoom no rosto, sons, emojis e flash nos momentos engraçados, de reação e de ênfase que a IA marcar.</p>
               )}
             </Secao>
 

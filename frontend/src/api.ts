@@ -13,6 +13,7 @@ export type Corte = {
   thumb_url: string
   json: string
   template?: string
+  momentos?: Momento[]
   reaplicavel: boolean
 }
 
@@ -28,6 +29,11 @@ export type Job = {
 }
 
 export type Estrategia = { nome: string; texto: string }
+
+export type TipoMomento = 'risada' | 'reacao' | 'enfase' | 'punchline' | 'virada'
+export type Efeito = 'zoom' | 'som' | 'emoji' | 'flash'
+/** momento marcado pela IA dentro do corte; t em segundos do vídeo de origem */
+export type Momento = { t: number; tipo: TipoMomento; intensidade: number; emoji: string }
 
 export type Template = {
   nome: string
@@ -59,6 +65,13 @@ export type Template = {
   }
   titulo: { ativo: boolean; segundos: number; tamanho: number; cor: string; fundo_cor: string; posicao_y: number }
   logo: { arquivo: string; largura: number; posicao: 'topo-direita' | 'topo-esquerda' | 'base-direita' | 'base-esquerda' }
+  efeitos: {
+    ativo: boolean
+    intensidade_min: number
+    zoom: number
+    regras: Partial<Record<TipoMomento, Efeito[]>>
+    sons: Partial<Record<TipoMomento, string>>
+  }
 }
 
 export type OpcoesTemplate = {
@@ -68,6 +81,8 @@ export type OpcoesTemplate = {
   fontes: string[]
   posicoes_logo: Template['logo']['posicao'][]
   padrao: Template
+  tipos_momento: TipoMomento[]
+  efeitos: Efeito[]
 }
 
 export type NovoJob = {
@@ -104,6 +119,7 @@ export const api = {
   agentes: () => req<string[]>('/api/agentes'),
   templates: () => req<Template[]>('/api/templates'),
   opcoesTemplate: () => req<OpcoesTemplate>('/api/templates/opcoes'),
+  sons: () => req<string[]>('/api/efeitos/sons'),
   salvarTemplate: (t: Template) => post<Template>('/api/templates', t),
   aplicarTemplate: (jobId: string, template: string, cortes?: string[]) =>
     post<Job>(`/api/jobs/${jobId}/aplicar_template`, { template, cortes }),

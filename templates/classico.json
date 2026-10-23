@@ -23,20 +23,53 @@
     "fundo_opacidade": 70,
     "destaque": false,
     "destaque_cor": "#FFD700",
-    "posicao_y": 73,
+    "posicao_y": 73.0,
     "animacao": "nenhuma"
   },
   "titulo": {
     "ativo": false,
-    "segundos": 3,
+    "segundos": 3.0,
     "tamanho": 60,
     "cor": "#000000",
     "fundo_cor": "#FFFFFF",
-    "posicao_y": 14
+    "posicao_y": 14.0
   },
   "logo": {
     "arquivo": "",
-    "largura": 18,
+    "largura": 18.0,
     "posicao": "topo-direita"
+  },
+  "efeitos": {
+    "ativo": false,
+    "intensidade_min": 2,
+    "zoom": 1.3,
+    "regras": {
+      "risada": [
+        "emoji",
+        "som"
+      ],
+      "reacao": [
+        "zoom",
+        "emoji"
+      ],
+      "enfase": [
+        "zoom"
+      ],
+      "punchline": [
+        "zoom",
+        "som"
+      ],
+      "virada": [
+        "flash",
+        "som"
+      ]
+    },
+    "sons": {
+      "risada": "tambor",
+      "reacao": "pop",
+      "enfase": "pop",
+      "punchline": "impacto",
+      "virada": "whoosh"
+    }
   }
 }
