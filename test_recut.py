@@ -164,3 +164,22 @@ def test_publico_tira_campos_internos():
     from recut import publico
     c = {"arquivo": "a.mp4", "nota": 7, "fonte": "C:/x/fonte.mp4", "palavras": [[0, 1, "oi"]]}
     assert publico(c) == {"arquivo": "a.mp4", "nota": 7}
+
+
+def test_atualizar_indices_reconstroi_do_disco(tmp_path):
+    import json
+    from recut import atualizar_indices
+    def corte(nome, nota, template):
+        (tmp_path / f"{nome}.json").write_text(json.dumps(
+            {"arquivo": f"{nome}.mp4", "nota": nota, "template": template, "fonte": "C:/x.ts", "palavras": []}))
+    corte("lote_0000_corte01", 6, "caixa")   # reaplicado: o índice ainda diz "classico"
+    corte("lote_0001_corte01", 9, "classico")  # gravado pela live depois: ainda fora do índice
+    (tmp_path / "cortes.json").write_text(json.dumps(
+        {"titulo": "live", "cortes": [{"arquivo": "lote_0000_corte01.mp4", "nota": 6, "template": "classico"}]}))
+    atualizar_indices(tmp_path)
+    dados = json.loads((tmp_path / "cortes.json").read_text())
+    assert dados["titulo"] == "live"
+    assert [(c["arquivo"], c["template"]) for c in dados["cortes"]] == [
+        ("lote_0001_corte01.mp4", "classico"), ("lote_0000_corte01.mp4", "caixa")]
+    assert all("fonte" not in c and "palavras" not in c for c in dados["cortes"])
+    assert not list(tmp_path.glob(".*.tmp"))  # gravação atômica não deixa lixo

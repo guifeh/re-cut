@@ -90,7 +90,7 @@ def criar_job(dados):
     m = {"id": jid, "entrada": entrada, "monitorar": bool(dados.get("monitorar")), "status": "rodando",
          "criado_em": time.strftime("%Y-%m-%dT%H:%M:%S"), "config": {k: v for k, v in dados.items() if k != "entrada"}}
     salvar_meta(job_dir, m)
-    executar(job_dir, args, "w")
+    executar(job_dir, args, "a")  # "a" (O_APPEND): a reaplicação escreve no mesmo log sem sobrescrever linhas
     return m
 
 
@@ -101,7 +101,7 @@ def executar(job_dir, args, modo_log, chave=None):
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     with lock:  # checar e registrar sob o mesmo lock: duas requisições juntas não disparam dois processos
         if jid in processos:
-            raise ValueError("já existe uma reaplicação de template rodando nesse job; espere terminar")
+            raise ValueError("esse job já tem um processo desse tipo rodando; espere terminar")
         log = open(job_dir / "log.txt", modo_log, encoding="utf-8")
         p = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, cwd=RAIZ, env=env)
         processos[jid] = p

@@ -17,6 +17,7 @@ RECUT_AGENTE=gemini (ou claude, codex) define o preferido; se um falhar, tenta o
 import argparse
 import datetime as dt
 import functools
+import glob
 import json
 import math
 import os
@@ -544,7 +545,7 @@ def reaplicar(arquivos, tpl):
         c["template"] = tpl["nome"]
         c["duracao"] = round((c["fim"] - c["inicio"]) / tpl["velocidade"], 1)
         arq.write_text(json.dumps(c, ensure_ascii=False, indent=2), encoding="utf-8")
-        atualizar_indices(arq.parent, publico(c))
+        atualizar_indices(arq.parent)
 
 
 def publico(c):
@@ -552,15 +553,31 @@ def publico(c):
     return {k: v for k, v in c.items() if k not in ("fonte", "palavras")}
 
 
-def atualizar_indices(pasta, corte):
-    """Troca o corte nos índices da pasta (cortes.json da live, <fonte>_cortes.json do vídeo)."""
-    for idx in [pasta / "cortes.json", *pasta.glob("*_cortes.json")]:
-        if not idx.is_file():
-            continue
-        dados = json.loads(idx.read_text(encoding="utf-8"))
-        lista = dados["cortes"] if isinstance(dados, dict) else dados
-        lista[:] = [corte if x.get("arquivo") == corte["arquivo"] else x for x in lista]
-        idx.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+def cortes_da_pasta(pasta, prefixo=""):
+    """Os cortes como estão no disco (fonte da verdade), sem campos internos, pela nota."""
+    padrao = f"{glob.escape(prefixo)}_corte[0-9]*.json" if prefixo else "*_corte[0-9]*.json"
+    cortes = (publico(json.loads(f.read_text(encoding="utf-8"))) for f in pasta.glob(padrao))
+    return sorted(cortes, key=lambda c: -c["nota"])
+
+
+def gravar_json(arquivo, dados):
+    """Grava num temporário e troca de uma vez: quem lê nunca pega o arquivo pela metade."""
+    tmp = arquivo.with_name(f".{arquivo.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, arquivo)
+
+
+def atualizar_indices(pasta):
+    """Refaz os índices da pasta (cortes.json da live, <fonte>_cortes.json do vídeo) a partir do disco.
+    A live e a reaplicação podem escrever ao mesmo tempo; como os dois reconstroem do disco em vez de
+    editar a lista, nenhum apaga o corte que o outro acabou de gravar."""
+    # ponytail: sem lock entre processos; sobra uma janela de milissegundos em que um índice pode sair
+    # sem o corte gravado no mesmo instante, e o próximo lote ou reaplicação conserta
+    live = pasta / "cortes.json"
+    if live.is_file():
+        gravar_json(live, {**json.loads(live.read_text(encoding="utf-8")), "cortes": cortes_da_pasta(pasta)})
+    for idx in pasta.glob("*_cortes.json"):
+        gravar_json(idx, cortes_da_pasta(pasta, idx.name.removesuffix("_cortes.json")))
 
 
 def processar(video, saida, prefixo, cfg):
@@ -612,9 +629,8 @@ def clipar_live(canal, info, saida, cfg):
                 novos = processar(lote, pasta, lote.stem, cfg)
                 todos += novos
                 feitos += 1
-                indice = sorted(todos, key=lambda c: -c["nota"])
-                (pasta / "cortes.json").write_text(json.dumps({**stream, "cortes": indice}, ensure_ascii=False,
-                                                              indent=2), encoding="utf-8")
+                # índice lido do disco, não da memória: preserva templates reaplicados durante a live
+                gravar_json(pasta / "cortes.json", {**stream, "cortes": cortes_da_pasta(pasta)})
                 evento(cfg, "live_clips", {**stream, "lote": lote.stem, "cortes": novos})
             if caiu:
                 break
