@@ -281,3 +281,27 @@ def test_restaurar_com_upload_ja_existente_nao_descarta_a_copia(ambiente):
     with pytest.raises(ValueError, match="mesmo nome em uploads"):
         lx.restaurar(item["id"])
     assert (lx.pasta / item["id"] / "upload" / enviado.name).read_bytes() == b"video original"
+
+
+def test_apagar_de_vez_nao_leva_o_upload_de_outro_video(ambiente):
+    lx, job, enviado = ambiente
+    outro = job.parent / "20261023-110000-def456"
+    outro.mkdir()
+    (outro / "job.json").write_text(json.dumps({"id": outro.name, "entrada": str(enviado)}))
+    a = lx.excluir_video(job)    # B ainda usa o upload: fica em uploads/
+    b = lx.excluir_video(outro)  # agora ninguém usa: o arquivo vai com B
+    lx.apagar(b["id"])           # apagar B de vez não pode levar o original de A
+    assert (lx.pasta / a["id"] / "upload" / enviado.name).read_bytes() == b"video original"
+    assert lx.item(a["id"])["upload"] == str(enviado)
+    lx.restaurar(a["id"])
+    assert enviado.read_bytes() == b"video original" and job.exists()
+
+
+def test_item_editado_a_mao_nao_derruba_a_lista(ambiente):
+    lx, job, _ = ambiente
+    item = lx.excluir_corte(job / "fonte_corte01.json")
+    caminho = lx.pasta / item["id"] / "item.json"
+    dados = json.loads(caminho.read_text())
+    del dados["excluido_em"]
+    caminho.write_text(json.dumps(dados))
+    assert [i["id"] for i in lx.listar()] == [item["id"]]

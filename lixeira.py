@@ -174,7 +174,7 @@ class Lixeira:
                 if self._fantasma(item, f.parent) and self._tirar_da_lista(f.parent):
                     continue
             itens.append(item)
-        return sorted(itens, key=lambda i: i["excluido_em"], reverse=True)
+        return sorted(itens, key=lambda i: str(i.get("excluido_em", "")), reverse=True)
 
     def _itens_json(self):
         return [f for f in self.pasta.glob("*/item.json") if not f.parent.name.startswith(APAGANDO)]
@@ -182,8 +182,11 @@ class Lixeira:
     def _fantasma(self, item, pasta):
         """item.json gravado mas o processo caiu antes de mover: os arquivos continuam no lugar original.
         Só é fantasma se não sobrou nada na pasta do item (um item parcial guarda a única cópia de algo)."""
-        if agora() - dt.datetime.fromisoformat(item["excluido_em"]) < IDADE_FANTASMA:
-            return False
+        try:
+            if agora() - dt.datetime.fromisoformat(item["excluido_em"]) < IDADE_FANTASMA:
+                return False
+        except (KeyError, TypeError, ValueError):
+            return False  # item.json editado à mão: na dúvida, não é fantasma
         if item["tipo"] == "video":
             return not (pasta / "job").exists() and (self.jobs / item["job_id"]).is_dir()
         return all((self.jobs / item["pasta"] / n).exists() for n in item["arquivos"])
@@ -246,6 +249,8 @@ class Lixeira:
         """Apaga de vez. acao="expirado" quando é a limpeza automática dos itens vencidos."""
         with self.lock:
             pasta, item = self._pasta_item(item_id), self.item(item_id)
+            if item["tipo"] == "video" and item.get("upload"):
+                self._passar_upload_adiante(pasta, item["upload"])
             fora = pasta.with_name(APAGANDO + pasta.name)
             try:
                 os.replace(pasta, fora)  # sai da lista de uma vez; se algo está aberto, nada muda
@@ -254,6 +259,39 @@ class Lixeira:
             self._registrar(acao, item)
             shutil.rmtree(fora, ignore_errors=True)  # já saiu da lista; sobra, se houver, a próxima limpeza tira
             return item
+
+    def _passar_upload_adiante(self, pasta, upload):
+        """Antes de apagar um vídeo que guarda o arquivo enviado: se outro vídeo (ativo ou na lixeira) também usa
+        esse upload, o arquivo vai para ele em vez de ser apagado junto. Se não der para mover, não apaga nada."""
+        arquivo = pasta / "upload" / Path(upload).name
+        if not arquivo.is_file():
+            return
+        destino = None
+        if self._upload_em_uso(upload) and not Path(upload).exists():
+            destino = Path(upload)  # um vídeo ativo usa: volta para uploads/
+        else:
+            for f in self._itens_json():
+                if f.parent == pasta:
+                    continue
+                try:
+                    outro = json.loads(f.read_text(encoding="utf-8"))
+                    meta = json.loads((f.parent / "job" / "job.json").read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if outro.get("tipo") == "video" and meta.get("entrada") == upload:
+                    destino = f.parent / "upload" / arquivo.name
+                    break
+        if destino is None:
+            return
+        try:
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(arquivo, destino)
+        except OSError as e:
+            raise ValueError(f"não deu para apagar agora ({e.strerror or e}); outro vídeo usa o mesmo arquivo enviado")
+        if destino != Path(upload):
+            item_json = destino.parent.parent / "item.json"
+            outro = json.loads(item_json.read_text(encoding="utf-8"))
+            item_json.write_text(json.dumps({**outro, "upload": upload}, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def expirar(self, momento=None):
         """Apaga de vez o que passou do prazo da lixeira; devolve os ids apagados."""
