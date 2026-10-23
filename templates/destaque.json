@@ -60,11 +60,11 @@
       "virada": []
     },
     "sons": {
-      "risada": "tambor",
-      "reacao": "pop",
-      "enfase": "pop",
-      "punchline": "impacto",
-      "virada": "whoosh"
+      "risada": "comedia/ba-dum-tss",
+      "reacao": "cartoon/pop",
+      "enfase": "cartoon/pop",
+      "punchline": "impacto/boom",
+      "virada": "transicao/whoosh"
     }
   }
 }

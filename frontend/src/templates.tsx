@@ -1,14 +1,14 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { Copy, Pencil, Plus, Upload } from 'lucide-react'
-import { api, upload, type Efeito, type OpcoesTemplate, type Template, type TipoMomento } from '@/api'
+import { api, upload, type Efeito, type OpcoesTemplate, type Som, type Template, type TipoMomento } from '@/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
@@ -221,13 +221,22 @@ function EditorTemplate({ inicial, opcoes, onFechar, onSalvo }: {
   const tit = <K extends keyof Template['titulo']>(k: K, v: Template['titulo'][K]) => setT((x) => ({ ...x, titulo: { ...x.titulo, [k]: v } }))
   const logo = <K extends keyof Template['logo']>(k: K, v: Template['logo'][K]) => setT((x) => ({ ...x, logo: { ...x.logo, [k]: v } }))
   const efe = <K extends keyof Template['efeitos']>(k: K, v: Template['efeitos'][K]) => setT((x) => ({ ...x, efeitos: { ...x.efeitos, [k]: v } }))
-  const [sons, setSons] = useState<string[]>([])
+  const [sons, setSons] = useState<Som[]>([])
   useEffect(() => {
     api.sons().then(setSons).catch(() => {})
   }, [])
   const alternarEfeito = (tipo: TipoMomento, e: Efeito) => {
     const atuais = t.efeitos.regras[tipo] ?? []
-    efe('regras', { ...t.efeitos.regras, [tipo]: atuais.includes(e) ? atuais.filter((x) => x !== e) : [...atuais, e] })
+    const ligando = !atuais.includes(e)
+    setT((x) => ({
+      ...x,
+      efeitos: {
+        ...x.efeitos,
+        regras: { ...x.efeitos.regras, [tipo]: ligando ? [...atuais, e] : atuais.filter((y) => y !== e) },
+        // ligou "som" num tipo sem som escolhido: grava o padrão em vez de só mostrar um que não seria salvo
+        sons: ligando && e === 'som' && !x.efeitos.sons[tipo] ? { ...x.efeitos.sons, [tipo]: opcoes.padrao.efeitos.sons[tipo] ?? sons[0]?.id } : x.efeitos.sons,
+      },
+    }))
   }
 
   async function enviarLogo(f: File | undefined) {
@@ -355,12 +364,8 @@ function EditorTemplate({ inicial, opcoes, onFechar, onSalvo }: {
                             </button>
                           ))}
                           {ativos.includes('som') && sons.length > 0 && (
-                            <div className="w-32">
-                              <Escolha
-                                valor={t.efeitos.sons[tipo] ?? sons[0]}
-                                itens={sons.map((s) => [s, s])}
-                                onChange={(v) => efe('sons', { ...t.efeitos.sons, [tipo]: v })}
-                              />
+                            <div className="w-44">
+                              <EscolhaSom sons={sons} valor={t.efeitos.sons[tipo] ?? ''} onChange={(v) => efe('sons', { ...t.efeitos.sons, [tipo]: v })} />
                             </div>
                           )}
                         </div>
@@ -430,6 +435,24 @@ function Escolha<T extends string>({ valor, itens, onChange }: { valor: T; itens
     <Select items={lista} value={valor} onValueChange={(v) => onChange(v as T)}>
       <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
       <SelectContent>{lista.map((i) => <SelectItem key={i.value} value={i.value}>{i.label}</SelectItem>)}</SelectContent>
+    </Select>
+  )
+}
+
+/** biblioteca de sons agrupada por categoria (efeitos/<categoria>/<nome>), como a do cut.pro */
+function EscolhaSom({ sons, valor, onChange }: { sons: Som[]; valor: string; onChange: (v: string) => void }) {
+  const categorias = [...new Set(sons.map((s) => s.categoria))]
+  return (
+    <Select items={sons.map((s) => ({ value: s.id, label: `${s.categoria} · ${s.nome}` }))} value={valor} onValueChange={(v) => onChange(String(v))}>
+      <SelectTrigger className="w-full"><SelectValue placeholder="Escolha um som" /></SelectTrigger>
+      <SelectContent>
+        {categorias.map((c) => (
+          <SelectGroup key={c}>
+            <SelectLabel>{c}</SelectLabel>
+            {sons.filter((s) => s.categoria === c).map((s) => <SelectItem key={s.id} value={s.id}>{s.nome}</SelectItem>)}
+          </SelectGroup>
+        ))}
+      </SelectContent>
     </Select>
   )
 }

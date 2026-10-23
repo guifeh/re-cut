@@ -116,13 +116,14 @@ POSICOES_LOGO = ("topo-direita", "topo-esquerda", "base-direita", "base-esquerda
 TIPOS_MOMENTO = ("risada", "reacao", "enfase", "punchline", "virada")
 EFEITOS = ("zoom", "som", "emoji", "flash")
 SONS = Path(__file__).with_name("efeitos")
+ID_SOM = r"[a-z0-9-]{1,40}(/[a-z0-9-]{1,40})?"  # "nome" (categoria geral) ou "categoria/nome"
 # sons padrão gerados pelo próprio ffmpeg (sem arquivo de terceiros); coloque os seus em efeitos/<nome>.wav|mp3
-SONS_PADRAO = {
-    "whoosh": "anoisesrc=d=0.6:c=pink:a=0.7,highpass=f=400,lowpass=f=4000,afade=t=in:d=0.3,afade=t=out:st=0.3:d=0.3,volume=4",
-    "impacto": "aevalsrc='0.7*sin(2*PI*(90-55*t)*t)*exp(-4.5*t)+0.25*(random(0)*2-1)*exp(-30*t)':d=0.9",
-    "pop": "aevalsrc='0.8*sin(2*PI*(1200-5000*t)*t)*exp(-28*t)':d=0.15",
-    "ding": "aevalsrc='0.5*sin(2*PI*1320*t)*exp(-3.5*t)+0.25*sin(2*PI*2640*t)*exp(-5*t)':d=1.2",
-    "tambor": ("aevalsrc='if(lt(t\\,0.15)\\,0.9*sin(2*PI*130*t)*exp(-22*t)\\,0)"
+SONS_PADRAO = {  # "<categoria>/<nome>": fonte lavfi; vira efeitos/<categoria>/<nome>.wav
+    "transicao/whoosh": "anoisesrc=d=0.6:c=pink:a=0.7,highpass=f=400,lowpass=f=4000,afade=t=in:d=0.3,afade=t=out:st=0.3:d=0.3,volume=4",
+    "impacto/boom": "aevalsrc='0.7*sin(2*PI*(90-55*t)*t)*exp(-4.5*t)+0.25*(random(0)*2-1)*exp(-30*t)':d=0.9",
+    "cartoon/pop": "aevalsrc='0.8*sin(2*PI*(1200-5000*t)*t)*exp(-28*t)':d=0.15",
+    "interface/ding": "aevalsrc='0.5*sin(2*PI*1320*t)*exp(-3.5*t)+0.25*sin(2*PI*2640*t)*exp(-5*t)':d=1.2",
+    "comedia/ba-dum-tss": ("aevalsrc='if(lt(t\\,0.15)\\,0.9*sin(2*PI*130*t)*exp(-22*t)\\,0)"
                "+if(between(t\\,0.18\\,0.36)\\,0.9*sin(2*PI*95*(t-0.18))*exp(-22*(t-0.18))\\,0)"
                "+if(gt(t\\,0.42)\\,0.45*(random(0)*2-1)*exp(-7*(t-0.42))\\,0)':d=1.1"),
 }
@@ -148,7 +149,8 @@ TEMPLATE_PADRAO = {
         "zoom": 1.3,
         "regras": {"risada": ["emoji", "som"], "reacao": ["zoom", "emoji"], "enfase": ["zoom"],
                    "punchline": ["zoom", "som"], "virada": ["flash", "som"]},
-        "sons": {"risada": "tambor", "reacao": "pop", "enfase": "pop", "punchline": "impacto", "virada": "whoosh"},
+        "sons": {"risada": "comedia/ba-dum-tss", "reacao": "cartoon/pop", "enfase": "cartoon/pop",
+                 "punchline": "impacto/boom", "virada": "transicao/whoosh"},
     },
 }
 _ASS_FORMATO = ("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
@@ -167,6 +169,8 @@ def normalizar_template(dados):
     """Mescla sobre o padrão e valida; levanta ValueError com a mensagem para o usuário."""
     t = json.loads(json.dumps(TEMPLATE_PADRAO))
     for k, v in (dados or {}).items():
+        if k == "efeitos" and isinstance(v, dict) and isinstance(v.get("sons"), dict):
+            v = {**v, "sons": {**t["efeitos"]["sons"], **v["sons"]}}
         if isinstance(t.get(k), dict) and isinstance(v, dict):
             t[k].update({kk: vv for kk, vv in v.items() if kk in t[k]})
         elif k in t:
@@ -203,8 +207,8 @@ def normalizar_template(dados):
             isinstance(v, list) and set(v) <= set(EFEITOS) for v in efe["regras"].values()),
          f"efeitos: regras por tipo ({', '.join(TIPOS_MOMENTO)}) com efeitos entre {', '.join(EFEITOS)}"),
         (isinstance(efe["sons"], dict) and set(efe["sons"]) <= set(TIPOS_MOMENTO) and all(
-            isinstance(v, str) and re.fullmatch(r"[a-z0-9-]{1,40}", v) for v in efe["sons"].values()),
-         "efeitos: som deve ser o nome de um arquivo de efeitos/ (letras minúsculas, números e hífen)"),
+            isinstance(v, str) and re.fullmatch(ID_SOM, v) for v in efe["sons"].values()),
+         "efeitos: som deve ser 'categoria/nome' de um arquivo em efeitos/ (minúsculas, números e hífen)"),
     ]
     for ok, msg in regras:
         if not ok:
@@ -376,17 +380,42 @@ def comandos_crop(trajetoria, passo, iw, w, hz=10):
     return "\n".join(linhas) + "\n"
 
 
+def ancora_zoom(t, xs, ys, passo, iw, ih, W, H, modo, crop_x=None):
+    """(ax, ay) de 0 a 1 no quadro final para onde o zoom do instante t (relativo ao corte) deve mirar:
+    a amostra de rosto mais próxima, convertida pelo enquadramento. Sem rosto perto: centro, um pouco acima."""
+    perto = sorted((abs(i * passo - t), i) for i, x in enumerate(xs) if x is not None and abs(i * passo - t) <= 1.5)
+    if not perto:
+        return 0.5, 0.45
+    i = perto[0][1]
+    fx, fy = xs[i], ys[i] * ih
+    if modo == "ajustar":  # vídeo inteiro encaixado no meio do quadro
+        k = min(W / iw, H / ih)
+        ox, oy = (W - iw * k) / 2, (H - ih * k) / 2
+        ax, ay = (ox + fx * k) / W, (oy + fy * k) / H
+    elif crop_x is not None:  # recorte da largura (altura inteira)
+        ax, ay = (fx - crop_x) / (int(ih * W / H) // 2 * 2), fy / ih  # mesma largura par de recorte_vertical
+    else:  # fonte mais estreita que o destino: recorte da altura, centralizado
+        h = iw * H / W
+        ax, ay = fx / iw, (fy - (ih - h) / 2) / h
+    return round(min(1, max(0, ax)), 3), round(min(1, max(0, ay)), 3)
+
+
+def expr_por_momento(zooms, indice, padrao):
+    """Expressão que vale zooms[i][indice] perto de cada momento e `padrao` fora deles (momentos ficam 2s+ apart)."""
+    termos = "".join(f"{z[indice] - padrao:+.3f}*between(it\\,{z[0] - 0.15:.2f}\\,{z[0] + 1.2:.2f})" for z in zooms)
+    return f"{padrao}{termos}"
+
+
 def expr_zoom(tempos, fator):
     """Expressão do zoompan: entra rápido no momento (punch-in de 80 ms), segura e sai em 200 ms."""
     termos = "+".join(f"clip((it-{t - 0.06:.2f})/0.08\\,0\\,1)*clip(({t + 0.9:.2f}-it)/0.2\\,0\\,1)" for t in tempos)
     return f"1+{fator - 1:.3f}*min(1\\,{termos})"
 
 
-def filtro_video(tpl, iw, ih, nome, x=None, seguir=False, com_logo=False, zooms=(), flashes=(), y_foco=0.45,
-                 com_emoji=False):
+def filtro_video(tpl, iw, ih, nome, x=None, seguir=False, com_logo=False, zooms=(), flashes=(), com_emoji=False):
     """filter_complex do ffmpeg para o template. x: posição do recorte (None = centro); com seguir=True
-    ele é só o primeiro quadro e o resto vem do arquivo <nome>.cmd via sendcmd. zooms/flashes: segundos
-    relativos ao corte; y_foco: altura do rosto (0-1) onde o zoom mira."""
+    ele é só o primeiro quadro e o resto vem do arquivo <nome>.cmd via sendcmd. zooms: (t, ax, ay) com t em
+    segundos relativos ao corte e (ax, ay) o rosto no quadro final (ancora_zoom); flashes: segundos."""
     W, H = PROPORCOES[tpl["proporcao"]]
     modo = tpl["enquadramento"]
     rec = recorte_vertical(iw / 2, iw, ih, W / H)
@@ -401,9 +430,11 @@ def filtro_video(tpl, iw, ih, nome, x=None, seguir=False, com_logo=False, zooms=
     else:
         v = f"[0:v]crop={rec[1]}:{ih}:{rec[0] if x is None else x}:0,scale={W}:{H}"
     if zooms:  # fps=30 antes: o zoompan gera 1 quadro por quadro de entrada no fps pedido; fixar evita mudar a duração
-        foco = f"ih*{y_foco:.2f}-(ih/zoom/2)"
-        v += (f",fps=30,zoompan=z='{expr_zoom(zooms, tpl['efeitos']['zoom'])}':x='iw/2-(iw/zoom/2)'"
-              f":y='max(0\\,min(ih-ih/zoom\\,{foco}))':d=1:s={W}x{H}:fps=30")
+        ax, ay = expr_por_momento(zooms, 1, 0.5), expr_por_momento(zooms, 2, 0.45)
+        z = expr_zoom([t for t, _, _ in zooms], tpl["efeitos"]["zoom"])
+        v += (f",fps=30,zoompan=z='{z}'"
+              f":x='max(0\\,min(iw-iw/zoom\\,iw*({ax})-iw/zoom/2))'"
+              f":y='max(0\\,min(ih-ih/zoom\\,ih*({ay})-ih/zoom/2))':d=1:s={W}x{H}:fps=30")
     for t in flashes:  # transição de "virada": clarão branco rápido
         v += (f",drawbox=x=0:y=0:w=iw:h=ih:color=white@0.8:t=fill:enable='between(t\\,{t:.2f}\\,{t + 0.06:.2f})'"
               f",drawbox=x=0:y=0:w=iw:h=ih:color=white@0.35:t=fill:enable='between(t\\,{t + 0.06:.2f}\\,{t + 0.18:.2f})'")
@@ -420,18 +451,18 @@ def filtro_video(tpl, iw, ih, nome, x=None, seguir=False, com_logo=False, zooms=
     return f"{v}[v];[1:v]scale={lw}:-1[lg];[v][lg]overlay={x}:{y}[out]"
 
 
-def filtro_audio(sons, primeiro_indice, velocidade):
-    """Mixa os efeitos sonoros no áudio do corte. sons: [(segundos relativos ao corte, volume)], um input
-    do ffmpeg por som a partir de `primeiro_indice`. None quando não há som (o áudio segue direto)."""
-    if not sons:
+def filtro_audio(tempos, primeiro_indice, velocidade):
+    """Mixa os efeitos sonoros no áudio do corte. tempos: segundos relativos ao corte, um input do ffmpeg
+    por som a partir de `primeiro_indice`. None quando não há som (o áudio segue direto)."""
+    if not tempos:
         return None
     partes = ["[0:a]aresample=44100[a0]"]
-    for k, (t, volume) in enumerate(sons):
+    for k, t in enumerate(tempos):
         ms = max(0, round(t * 1000))
-        partes.append(f"[{primeiro_indice + k}:a]aresample=44100,adelay={ms}:all=1,volume={volume}[s{k}]")
-    entradas = "[a0]" + "".join(f"[s{k}]" for k in range(len(sons)))
+        partes.append(f"[{primeiro_indice + k}:a]aresample=44100,adelay={ms}:all=1,volume=0.9[s{k}]")
+    entradas = "[a0]" + "".join(f"[s{k}]" for k in range(len(tempos)))
     tempo = f",atempo={velocidade}" if velocidade != 1 else ""
-    partes.append(f"{entradas}amix=inputs={len(sons) + 1}:normalize=0:duration=first{tempo},alimiter=limit=0.95[aout]")
+    partes.append(f"{entradas}amix=inputs={len(tempos) + 1}:normalize=0:duration=first{tempo},alimiter=limit=0.95[aout]")
     return ";".join(partes)
 
 
@@ -603,26 +634,49 @@ def trajetoria_do_rosto(video, inicio, fim, passo=PASSO_ROSTO):
             ys.append((y + h / 2) / escala / ih)
         else:
             xs.append(None)
+            ys.append(None)
     cap.release()
-    return xs, iw, ih, (statistics.median(ys) if ys else None)
+    return xs, ys, iw, ih
 
 
 def garantir_sons():
-    """Cria efeitos/ com os sons padrão (gerados pelo ffmpeg) na primeira vez."""
-    SONS.mkdir(exist_ok=True)
-    for nome, fonte in SONS_PADRAO.items():
-        if not (SONS / f"{nome}.wav").is_file():
-            subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", fonte, "-ar", "44100",
-                            str(SONS / f"{nome}.wav")], check=True)
+    """Cria efeitos/<categoria>/ com os sons padrão (gerados pelo ffmpeg) na primeira vez."""
+    for som_id, fonte in SONS_PADRAO.items():
+        destino = SONS / f"{som_id}.wav"
+        if not destino.is_file():
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            tmp = destino.with_name(f".{destino.stem}.{os.getpid()}.wav")  # ninguém lê um .wav pela metade
+            subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", fonte, "-ar", "44100", str(tmp)],
+                           check=True)
+            os.replace(tmp, destino)
 
 
 def listar_sons():
+    """Biblioteca de sons por categoria: efeitos/<categoria>/<nome>.wav|mp3; soltos na raiz = 'geral'."""
     garantir_sons()
-    return sorted({f.stem for f in SONS.iterdir() if f.suffix.lower() in (".wav", ".mp3")})
+    sons = []
+    for f in sorted([*SONS.glob("*.*"), *SONS.glob("*/*.*")]):
+        som_id = f.relative_to(SONS).with_suffix("").as_posix()
+        if f.suffix.lower() in (".wav", ".mp3") and re.fullmatch(ID_SOM, som_id):
+            categoria = som_id.split("/")[0] if "/" in som_id else "geral"
+            sons.append({"id": som_id, "categoria": categoria, "nome": f.stem})
+    return sons
 
 
-def arquivo_som(nome):
-    return next((f for f in (SONS / f"{nome}.wav", SONS / f"{nome}.mp3") if f.is_file()), None)
+def arquivo_som(som_id):
+    """Caminho do som pelo id, só dentro de efeitos/ (o id já é validado no template)."""
+    if not re.fullmatch(ID_SOM, som_id or ""):
+        return None
+    for f in (SONS / f"{som_id}.wav", SONS / f"{som_id}.mp3"):
+        if f.is_file() and f.resolve().is_relative_to(SONS.resolve()):
+            return f
+    return None
+
+
+def tem_audio(video):
+    """O vídeo tem trilha de áudio? (o ffmpeg lista os streams no stderr ao abrir o arquivo)"""
+    r = subprocess.run([FFMPEG, "-hide_banner", "-i", str(video)], capture_output=True, text=True, errors="replace")
+    return re.search(r"Stream #\d+:\d+.*: Audio:", r.stderr) is not None
 
 
 def tamanho_video(video):
@@ -638,48 +692,57 @@ def renderizar(video, c, palavras, saida, nome, tpl=None):
     W, H = PROPORCOES[tpl["proporcao"]]
     dur, vel = c["fim"] - c["inicio"], tpl["velocidade"]
     modo = tpl["enquadramento"]
-    x, seguir, y_foco = None, False, 0.45
+    x, seguir = None, False
     plano = plano_efeitos(c.get("momentos", []), tpl, c["inicio"])
-    if modo in ("rosto", "rosto_fixo"):
-        xs, iw, ih, y_rosto = trajetoria_do_rosto(video, c["inicio"], c["fim"])
-        y_foco = y_rosto or y_foco
-        rec = recorte_vertical(iw / 2, iw, ih, W / H)
-        if rec:
-            w = rec[1]
-            trajetoria = suavizar_trajetoria(xs, iw / 2, zona_morta=0.06 * w)
-            seguir = modo == "rosto"
-            if seguir:
-                (saida / f"{nome}.cmd").write_text(comandos_crop(trajetoria, PASSO_ROSTO, iw, w), encoding="utf-8")
-            # rosto: x do primeiro quadro; rosto_fixo (DisableCameraMotion): onde o rosto mais ficou
-            x = recorte_vertical(trajetoria[0] if seguir else statistics.median(trajetoria), iw, ih, W / H)[0]
+    por_efeito = {e: [(rel, m) for rel, efeito, m in plano if efeito == e] for e in EFEITOS}
+    tempos_zoom = [rel for rel, _ in por_efeito["zoom"]]
+    if modo in ("rosto", "rosto_fixo") or tempos_zoom:  # o zoom mira o rosto em qualquer enquadramento
+        xs, ys, iw, ih = trajetoria_do_rosto(video, c["inicio"], c["fim"])
     else:
-        iw, ih = tamanho_video(video)
+        (iw, ih), xs, ys = tamanho_video(video), [], []
+    rec = recorte_vertical(iw / 2, iw, ih, W / H)
+    trajetoria = suavizar_trajetoria(xs, iw / 2, zona_morta=0.06 * rec[1]) if rec and xs else []
+    if modo in ("rosto", "rosto_fixo") and rec:
+        seguir = modo == "rosto"
+        if seguir:
+            (saida / f"{nome}.cmd").write_text(comandos_crop(trajetoria, PASSO_ROSTO, iw, rec[1]), encoding="utf-8")
+        # rosto: x do primeiro quadro; rosto_fixo (DisableCameraMotion): onde o rosto mais ficou
+        x = recorte_vertical(trajetoria[0] if seguir else statistics.median(trajetoria), iw, ih, W / H)[0]
+
+    def crop_x_em(t):  # x do recorte no instante t, do jeito que o filtro vai cortar
+        if modo == "ajustar" or not rec:
+            return None
+        if seguir:
+            return recorte_vertical(trajetoria[min(round(t / PASSO_ROSTO), len(trajetoria) - 1)], iw, ih, W / H)[0]
+        return rec[0] if x is None else x
+
+    zooms = [(t, *ancora_zoom(t, xs, ys, PASSO_ROSTO, iw, ih, W, H, modo, crop_x_em(t))) for t in tempos_zoom]
     logo = tpl["logo"]["arquivo"]
     com_logo = bool(logo) and Path(logo).is_file()
     if logo and not com_logo:
         print(f"  logo não encontrado ({logo}); seguindo sem logo", file=sys.stderr)
     (saida / f"{nome}.ass").write_text(legenda_ass(palavras, c["inicio"], c["fim"], tpl, c.get("titulo", ""), plano),
                                        encoding="utf-8")
-    sons = []
-    if any(efeito == "som" for _, efeito, _ in plano):
+    sons, pedidos_som = [], por_efeito["som"]
+    if pedidos_som and not tem_audio(video):  # sem trilha não há onde mixar ([0:a] não existiria)
+        print("  vídeo sem áudio; seguindo sem os sons de efeito", file=sys.stderr)
+        pedidos_som = []
+    if pedidos_som:
         garantir_sons()
-    for rel, efeito, m in plano:
-        if efeito == "som":
-            arq = arquivo_som(tpl["efeitos"]["sons"].get(m["tipo"], ""))
-            if arq:
-                sons.append((rel, arq))
-            else:
-                print(f"  som de '{m['tipo']}' não encontrado em efeitos/; seguindo sem ele", file=sys.stderr)
+    for rel, m in pedidos_som:
+        arq = arquivo_som(tpl["efeitos"]["sons"].get(m["tipo"], ""))
+        if arq:
+            sons.append((rel, arq))
+        else:
+            print(f"  som de '{m['tipo']}' não encontrado em efeitos/; seguindo sem ele", file=sys.stderr)
     args = [FFMPEG, "-v", "error", "-y", "-ss", f"{c['inicio']:.2f}", "-t", f"{dur:.2f}", "-i", str(Path(video).resolve())]
     if com_logo:
         args += ["-i", str(Path(logo).resolve())]
     for _, arq in sons:
         args += ["-i", str(arq.resolve())]
     grafo = filtro_video(tpl, iw, ih, nome, x, seguir, com_logo,
-                         zooms=[rel for rel, efeito, _ in plano if efeito == "zoom"],
-                         flashes=[rel for rel, efeito, _ in plano if efeito == "flash"],
-                         y_foco=y_foco, com_emoji=any(efeito == "emoji" for _, efeito, _ in plano))
-    audio = filtro_audio([(rel, 0.9) for rel, _ in sons], 2 if com_logo else 1, vel)
+                         zooms=zooms, flashes=[rel for rel, _ in por_efeito["flash"]], com_emoji=bool(por_efeito["emoji"]))
+    audio = filtro_audio([rel for rel, _ in sons], 2 if com_logo else 1, vel)
     if audio:
         args += ["-filter_complex", f"{grafo};{audio}", "-map", "[out]", "-map", "[aout]"]
     else:

@@ -34,6 +34,8 @@ export type TipoMomento = 'risada' | 'reacao' | 'enfase' | 'punchline' | 'virada
 export type Efeito = 'zoom' | 'som' | 'emoji' | 'flash'
 /** momento marcado pela IA dentro do corte; t em segundos do vídeo de origem */
 export type Momento = { t: number; tipo: TipoMomento; intensidade: number; emoji: string }
+/** som da biblioteca efeitos/<categoria>/<nome>; id = "categoria/nome" */
+export type Som = { id: string; categoria: string; nome: string }
 
 export type Template = {
   nome: string
@@ -119,7 +121,7 @@ export const api = {
   agentes: () => req<string[]>('/api/agentes'),
   templates: () => req<Template[]>('/api/templates'),
   opcoesTemplate: () => req<OpcoesTemplate>('/api/templates/opcoes'),
-  sons: () => req<string[]>('/api/efeitos/sons'),
+  sons: () => req<Som[]>('/api/efeitos/sons'),
   salvarTemplate: (t: Template) => post<Template>('/api/templates', t),
   aplicarTemplate: (jobId: string, template: string, cortes?: string[]) =>
     post<Job>(`/api/jobs/${jobId}/aplicar_template`, { template, cortes }),
