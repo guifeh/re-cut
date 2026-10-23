@@ -29,6 +29,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import uuid
 from array import array
 from pathlib import Path
 
@@ -117,7 +118,7 @@ TIPOS_MOMENTO = ("risada", "reacao", "enfase", "punchline", "virada")
 EFEITOS = ("zoom", "som", "emoji", "flash")
 SONS = Path(__file__).with_name("efeitos")
 ID_SOM = r"[a-z0-9-]{1,40}(/[a-z0-9-]{1,40})?"  # "nome" (categoria geral) ou "categoria/nome"
-# sons padrão gerados pelo próprio ffmpeg (sem arquivo de terceiros); coloque os seus em efeitos/<nome>.wav|mp3
+# sons padrão gerados pelo próprio ffmpeg (sem arquivo de terceiros); os seus vão em efeitos/<categoria>/<nome>.wav|mp3
 SONS_PADRAO = {  # "<categoria>/<nome>": fonte lavfi; vira efeitos/<categoria>/<nome>.wav
     "transicao/whoosh": "anoisesrc=d=0.6:c=pink:a=0.7,highpass=f=400,lowpass=f=4000,afade=t=in:d=0.3,afade=t=out:st=0.3:d=0.3,volume=4",
     "impacto/boom": "aevalsrc='0.7*sin(2*PI*(90-55*t)*t)*exp(-4.5*t)+0.25*(random(0)*2-1)*exp(-30*t)':d=0.9",
@@ -645,7 +646,7 @@ def garantir_sons():
         destino = SONS / f"{som_id}.wav"
         if not destino.is_file():
             destino.parent.mkdir(parents=True, exist_ok=True)
-            tmp = destino.with_name(f".{destino.stem}.{os.getpid()}.wav")  # ninguém lê um .wav pela metade
+            tmp = destino.with_name(f".{destino.stem}.{uuid.uuid4().hex}.wav")  # único por chamada (threads do servidor)
             subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", fonte, "-ar", "44100", str(tmp)],
                            check=True)
             os.replace(tmp, destino)
