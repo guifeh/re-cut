@@ -95,3 +95,72 @@ def test_upload_compartilhado_fica(ambiente):
     assert enviado.exists() and item["upload"] is None  # o outro vídeo ainda precisa do arquivo
     lx.restaurar(item["id"])
     assert job.exists() and enviado.exists()
+
+
+def travar(monkeypatch, quando):
+    """Simula o Windows recusando mover um arquivo aberto (WinError 32) quando `quando(origem)` é verdade."""
+    original = lixeira.os.replace
+
+    def replace(origem, destino):
+        if quando(str(origem)):
+            raise PermissionError(32, "O arquivo já está sendo usado por outro processo")
+        return original(origem, destino)
+    monkeypatch.setattr(lixeira.os, "replace", replace)
+
+
+def test_upload_travado_nao_deixa_video_orfao(ambiente, monkeypatch):
+    lx, job, enviado = ambiente
+    travar(monkeypatch, lambda origem: origem.endswith("minha-live.mp4"))
+    item = lx.excluir_video(job)
+    assert not job.exists() and enviado.exists() and item["upload"] is None  # upload ficou, vídeo foi
+    assert [i["id"] for i in lx.listar()] == [item["id"]]  # aparece na lixeira...
+    assert lx.historico()[0]["acao"] == "excluido"  # ...e no histórico
+    monkeypatch.undo()
+    lx.restaurar(item["id"])
+    assert (job / "job.json").exists()
+
+
+def test_restaurar_travado_volta_tudo_para_a_lixeira(ambiente, monkeypatch):
+    lx, job, enviado = ambiente
+    item = lx.excluir_video(job)
+    travar(monkeypatch, lambda origem: origem.endswith("minha-live.mp4"))  # o job volta, o upload não
+    with pytest.raises(ValueError, match="restaurar agora"):
+        lx.restaurar(item["id"])
+    assert not job.exists() and not enviado.exists()  # o job voltou para a lixeira: nada pela metade
+    assert [i["id"] for i in lx.listar()] == [item["id"]]
+    monkeypatch.undo()
+    lx.restaurar(item["id"])
+    assert job.exists() and enviado.exists()
+
+
+def test_apagar_travado_nao_some_da_lista(ambiente, monkeypatch):
+    lx, job, _ = ambiente
+    item = lx.excluir_corte(job / "fonte_corte01.json")
+    travar(monkeypatch, lambda origem: item["id"] in origem)
+    with pytest.raises(ValueError, match="apagar agora"):
+        lx.apagar(item["id"])
+    assert [i["id"] for i in lx.listar()] == [item["id"]] and lx.historico()[0]["acao"] == "excluido"
+
+
+def test_linha_corrompida_no_historico(ambiente):
+    lx, job, _ = ambiente
+    lx.excluir_corte(job / "fonte_corte01.json")
+    with open(lx.registro, "a", encoding="utf-8") as f:
+        f.write('{"em": "2026-10-23T1')  # queda no meio da escrita
+    lx.excluir_corte(job / "fonte_corte02.json")
+    assert [h["titulo"] for h in lx.historico()] == ["corte 2", "corte 1"]
+
+
+def test_upload_compartilhado_volta_com_o_video_restaurado(ambiente):
+    lx, job, enviado = ambiente
+    outro = job.parent / "20261023-110000-def456"
+    outro.mkdir()
+    (outro / "job.json").write_text(json.dumps({"id": outro.name, "entrada": str(enviado)}))
+    primeiro = lx.excluir_video(job)       # o outro ainda usa o upload: fica
+    segundo = lx.excluir_video(outro)      # ninguém mais usa: vai com o segundo
+    assert not enviado.exists() and segundo["upload"] == str(enviado)
+    lx.restaurar(primeiro["id"])           # o primeiro volta e busca o arquivo na pasta do segundo
+    assert job.exists() and enviado.read_bytes() == b"video original"
+    assert lx.item(segundo["id"])["upload"] is None
+    lx.restaurar(segundo["id"])            # o segundo volta sem precisar do arquivo (já está em uploads/)
+    assert outro.exists() and enviado.exists()

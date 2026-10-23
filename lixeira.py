@@ -3,6 +3,9 @@
 Excluir nunca apaga: move o vídeo (job inteiro, com o original enviado) ou o corte para lixeira/<id>/, onde fica
 RECUT_LIXEIRA_DIAS dias (padrão 30) podendo ser restaurado. Cada ação vai para lixeira/registro.jsonl com data,
 hora e o vídeo afetado; o registro só recebe linhas novas, então serve de histórico.
+
+Regra de ordem em toda operação: primeiro o que pode falhar sem estrago (gravar item.json, renomear pastas),
+depois o resto; se algo falha no meio, desfaz o que já tinha movido. Nunca fica arquivo fora da lista.
 """
 import datetime as dt
 import json
@@ -15,6 +18,7 @@ from pathlib import Path
 
 RETENCAO_DIAS = int(os.getenv("RECUT_LIXEIRA_DIAS", "30"))
 EXTENSOES_CORTE = (".mp4", ".jpg", ".json", ".ass", ".cmd")  # tudo que renderizar() gera para um corte
+APAGANDO = ".apagando-"  # pasta renomeada antes do rmtree; sobra só se algum arquivo estava aberto
 
 
 def agora():
@@ -33,14 +37,26 @@ class Lixeira:
         linha = {"em": agora().isoformat(), "acao": acao, "tipo": item["tipo"], "item": item["id"],
                  "titulo": item["titulo"], "entrada": item["entrada"], "job_id": item["job_id"]}
         self.pasta.mkdir(parents=True, exist_ok=True)
-        with open(self.registro, "a", encoding="utf-8") as f:
-            f.write(json.dumps(linha, ensure_ascii=False) + "\n")
+        with open(self.registro, "a+b") as f:
+            f.seek(0, os.SEEK_END)
+            if f.tell():  # uma escrita cortada deixa a última linha sem \n: começa numa nova para não grudar nela
+                f.seek(-1, os.SEEK_END)
+                inicio = b"" if f.read(1) == b"\n" else b"\n"
+            else:
+                inicio = b""
+            f.write(inicio + (json.dumps(linha, ensure_ascii=False) + "\n").encode("utf-8"))
 
-    def historico(self, limite=300):
+    def historico(self):
+        """Mais recente primeiro; uma linha corrompida (queda no meio da escrita) é pulada, não derruba o resto."""
         if not self.registro.is_file():
             return []
-        linhas = self.registro.read_text(encoding="utf-8").splitlines()
-        return [json.loads(l) for l in reversed(linhas[-limite:]) if l.strip()]
+        eventos = []
+        for linha in self.registro.read_text(encoding="utf-8", errors="replace").splitlines()[-300:]:
+            try:
+                eventos.append(json.loads(linha))
+            except ValueError:
+                continue
+        return eventos[::-1]
 
     # ---------- excluir ----------
 
@@ -68,6 +84,7 @@ class Lixeira:
                                    thumb=f"job/{capa.relative_to(job_dir).as_posix()}" if capa and capa.is_file() else None,
                                    upload=None)
             destino = self.pasta / item["id"]
+            self._salvar_item(item)  # antes de mover: se o processo cair no meio, o item já está na lista
             try:
                 os.replace(job_dir, destino / "job")  # renomear a pasta: ou move tudo ou nada
             except OSError as e:
@@ -77,10 +94,13 @@ class Lixeira:
             # o arquivo enviado só vai junto se nenhum outro vídeo usa o mesmo upload (os cortes dele apontam para lá)
             if original.is_file() and original.resolve().is_relative_to(self.uploads.resolve()) \
                     and not self._upload_em_uso(job_meta.get("entrada")):
-                (destino / "upload").mkdir()
-                os.replace(original, destino / "upload" / original.name)
-                item["upload"] = str(original)  # onde volta ao restaurar
-                item["tamanho"] += (destino / "upload" / original.name).stat().st_size
+                try:
+                    (destino / "upload").mkdir()
+                    os.replace(original, destino / "upload" / original.name)
+                    item["upload"] = str(original)  # onde volta ao restaurar
+                    item["tamanho"] += (destino / "upload" / original.name).stat().st_size
+                except OSError:
+                    pass  # arquivo aberto por outro programa: fica em uploads/, o vídeo vai para a lixeira mesmo assim
             self._salvar_item(item)
             self._registrar("excluido", item)
             return item
@@ -101,17 +121,12 @@ class Lixeira:
                                    if arquivo_json.with_suffix(".jpg").is_file() else None)
             destino = self.pasta / item["id"] / "corte"
             destino.mkdir()
-            movidos = []
+            self._salvar_item(item)
             try:
-                for f in arquivos:
-                    os.replace(f, destino / f.name)
-                    movidos.append(f)
-            except OSError as e:  # volta o que já tinha movido: o corte não fica pela metade
-                for f in movidos:
-                    os.replace(destino / f.name, f)
+                _mover_todos([(f, destino / f.name) for f in arquivos])
+            except OSError as e:
                 shutil.rmtree(self.pasta / item["id"], ignore_errors=True)
                 raise ValueError(f"não deu para mover o corte agora ({e.strerror or e}); feche o player e tente de novo")
-            self._salvar_item(item)
             self._registrar("excluido", item)
             return item
 
@@ -159,36 +174,65 @@ class Lixeira:
                 destino = self.jobs / item["job_id"]
                 if destino.exists():
                     raise ValueError("já existe um vídeo com esse id fora da lixeira")
-                if item.get("upload") and Path(item["upload"]).exists():
-                    raise ValueError("já existe um arquivo enviado com o mesmo nome em uploads/")
-                self.jobs.mkdir(parents=True, exist_ok=True)
-                os.replace(pasta / "job", destino)
-                if item.get("upload"):
-                    Path(item["upload"]).parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(pasta / "upload" / Path(item["upload"]).name, item["upload"])
+                movimentos = [(pasta / "job", destino)]
+                upload, dono_do_upload = self._upload_para_restaurar(pasta)
+                if upload:
+                    movimentos.append(upload)
             else:
                 destino = self.jobs / item["pasta"]
                 if not destino.is_dir():
                     raise ValueError("o vídeo deste corte também foi excluído; restaure o vídeo antes")
                 if any((destino / nome).exists() for nome in item["arquivos"]):
                     raise ValueError("já existe um corte com esse nome no vídeo")
-                for nome in item["arquivos"]:
-                    os.replace(pasta / "corte" / nome, destino / nome)
-            shutil.rmtree(pasta)
+                movimentos, dono_do_upload = [(pasta / "corte" / nome, destino / nome) for nome in item["arquivos"]], None
+            self.jobs.mkdir(parents=True, exist_ok=True)
+            try:
+                _mover_todos(movimentos)  # tudo ou nada: se um falha, os já movidos voltam para a lixeira
+            except OSError as e:
+                raise ValueError(f"não deu para restaurar agora ({e.strerror or e}); feche o player e tente de novo")
+            if dono_do_upload and dono_do_upload.parent != pasta:  # o outro vídeo continua na lixeira, sem o arquivo
+                outro = json.loads(dono_do_upload.read_text(encoding="utf-8"))
+                dono_do_upload.write_text(json.dumps({**outro, "upload": None}, ensure_ascii=False, indent=2),
+                                          encoding="utf-8")
             self._registrar("restaurado", item)
+            self._tirar_da_lista(pasta)
             return {**item, "restaurado_em": agora().isoformat(), "destino": str(destino)}
+
+    def _upload_para_restaurar(self, pasta):
+        """((origem, destino), item.json de quem guarda) do arquivo enviado do vídeo, se ele não está em uploads/.
+        Vem da própria pasta do item ou, quando dois vídeos usavam o mesmo upload, do outro vídeo excluído."""
+        meta = json.loads((pasta / "job" / "job.json").read_text(encoding="utf-8"))
+        original = Path(meta.get("entrada", ""))
+        if not original.name or original.exists() or not original.resolve().is_relative_to(self.uploads.resolve()):
+            return None, None
+        for f in [pasta / "item.json", *self.pasta.glob("*/item.json")]:
+            try:
+                dono = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            arquivo = f.parent / "upload" / original.name
+            if dono.get("upload") == str(original) and arquivo.is_file():
+                return (arquivo, original), f
+        return None, None
 
     def apagar(self, item_id, acao="apagado"):
         """Apaga de vez. acao="expirado" quando é a limpeza automática dos itens vencidos."""
         with self.lock:
             pasta, item = self._pasta_item(item_id), self.item(item_id)
-            shutil.rmtree(pasta)
+            fora = pasta.with_name(APAGANDO + pasta.name)
+            try:
+                os.replace(pasta, fora)  # sai da lista de uma vez; se algo está aberto, nada muda
+            except OSError as e:
+                raise ValueError(f"não deu para apagar agora ({e.strerror or e}); feche o player e tente de novo")
             self._registrar(acao, item)
+            shutil.rmtree(fora, ignore_errors=True)  # já saiu da lista; sobra, se houver, a próxima limpeza tira
             return item
 
     def expirar(self, momento=None):
         """Apaga de vez o que passou do prazo da lixeira; devolve os ids apagados."""
         momento = momento or agora()
+        for resto in self.pasta.glob(APAGANDO + "*"):  # sobras de um apagar com arquivo aberto
+            shutil.rmtree(resto, ignore_errors=True)
         vencidos = []
         for f in list(self.pasta.glob("*/item.json")):
             try:
@@ -199,6 +243,31 @@ class Lixeira:
             except (OSError, ValueError, KeyError, FileNotFoundError):
                 continue  # item em uso agora: fica para a próxima limpeza
         return vencidos
+
+    @staticmethod
+    def _tirar_da_lista(pasta):
+        """Some da lista de uma vez (renomeia) e depois apaga; o que não sair agora a próxima limpeza tira."""
+        fora = pasta.with_name(APAGANDO + pasta.name)
+        try:
+            os.replace(pasta, fora)
+        except OSError:
+            fora = pasta
+            (pasta / "item.json").unlink(missing_ok=True)
+        shutil.rmtree(fora, ignore_errors=True)
+
+
+def _mover_todos(movimentos):
+    """Move (origem, destino) em ordem; se um falha, devolve os que já foram e repassa o erro."""
+    feitos = []
+    try:
+        for origem, destino in movimentos:
+            Path(destino).parent.mkdir(parents=True, exist_ok=True)
+            os.replace(origem, destino)
+            feitos.append((origem, destino))
+    except OSError:
+        for origem, destino in reversed(feitos):
+            os.replace(destino, origem)
+        raise
 
 
 def nome_entrada(entrada):

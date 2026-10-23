@@ -12,6 +12,19 @@ export const quando = (iso: string) => dataHora.format(new Date(iso))
 const megas = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${(bytes / 1e6).toFixed(1)} MB`)
 const diasAte = (iso: string) => Math.max(0, Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000))
 
+let prazoEmCache: Promise<number | null> | null = null
+/** Dias que um item fica na lixeira, vindos do servidor (RECUT_LIXEIRA_DIAS); busca uma vez só. */
+export function usePrazoLixeira() {
+  const [dias, setDias] = useState<number | null>(null)
+  useEffect(() => {
+    prazoEmCache ??= api.lixeira().then((r): number | null => r.retencao_dias).catch(() => null)
+    prazoEmCache.then(setDias)
+  }, [])
+  return dias
+}
+/** "por 30 dias" quando o prazo já chegou; senão só "por um tempo" (nunca um número errado) */
+export const porDias = (dias: number | null) => (dias === null ? 'por um tempo' : `por ${dias} ${dias === 1 ? 'dia' : 'dias'}`)
+
 const ACAO: Record<EventoLixeira['acao'], { texto: string; classe: string }> = {
   excluido: { texto: 'Movido para a lixeira', classe: 'text-amber-400' },
   restaurado: { texto: 'Restaurado', classe: 'text-emerald-400' },
@@ -61,11 +74,12 @@ export function Confirmar({ aberto, titulo, descricao, acao, perigo, onConfirmar
 
 export function Lixeira({ onMudou }: { onMudou: () => void }) {
   const [itens, setItens] = useState<ItemLixeira[] | null>(null)
+  const [prazo, setPrazo] = useState<number | null>(null)
   const [registro, setRegistro] = useState<EventoLixeira[]>([])
   const [apagando, setApagando] = useState<ItemLixeira | null>(null)
 
   const carregar = useCallback(() => {
-    api.lixeira().then(setItens).catch(() => setItens([]))
+    api.lixeira().then((r) => { setItens(r.itens); setPrazo(r.retencao_dias) }).catch(() => setItens([]))
     api.registroLixeira().then(setRegistro).catch(() => {})
   }, [])
   useEffect(carregar, [carregar])
@@ -98,7 +112,7 @@ export function Lixeira({ onMudou }: { onMudou: () => void }) {
         <div>
           <h2 className="text-lg font-semibold">Lixeira</h2>
           <p className="text-sm text-muted-foreground">
-            Vídeos e cortes excluídos ficam aqui por 30 dias e podem ser restaurados. Depois disso são apagados de vez.
+            Vídeos e cortes excluídos ficam aqui {porDias(prazo)} e podem ser restaurados. Depois disso são apagados de vez.
           </p>
         </div>
         {itens?.length === 0 && (

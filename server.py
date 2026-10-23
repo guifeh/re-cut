@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 import recut
+import lixeira as lixeira_mod
 from lixeira import Lixeira
 
 RAIZ = Path(__file__).parent
@@ -26,6 +27,7 @@ DIST = RAIZ / "frontend" / "dist"
 PORTA = int(os.getenv("PORT", "8000"))
 MAX_UPLOAD = 20 * 1024 ** 3  # 20 GB
 LIXEIRA = RAIZ / "lixeira"
+ARQUIVOS_SERVIDOS = (".mp4", ".jpg", ".png")  # /files só entrega mídia; .json e o registro têm caminhos locais
 lixeira = Lixeira(LIXEIRA, JOBS, UPLOADS)
 
 processos = {}  # id (ou id + REAPLICANDO) -> Popen; só os desta execução do servidor
@@ -164,15 +166,12 @@ def salvar_template(dados):
     return tpl
 
 
-def ocupado(jid):
-    with lock:
-        return jid in processos or jid + REAPLICANDO in processos
-
-
 def excluir_video(job_dir):
-    if ocupado(job_dir.name):
-        raise ValueError("o vídeo ainda está sendo processado; pare o job antes de excluir")
-    return lixeira.excluir_video(job_dir)
+    # sob o mesmo lock de executar(): nenhum processo começa nesse vídeo entre a checagem e a mudança de pasta
+    with lock:
+        if job_dir.name in processos or job_dir.name + REAPLICANDO in processos:
+            raise ValueError("o vídeo ainda está sendo processado; pare o job antes de excluir")
+        return lixeira.excluir_video(job_dir)
 
 
 def excluir_corte(job_dir, dados):
@@ -184,7 +183,7 @@ def excluir_corte(job_dir, dados):
     with lock:  # a live pode seguir gerando cortes; só não dá para excluir no meio de uma reaplicação de template
         if job_dir.name + REAPLICANDO in processos:
             raise ValueError("há uma reaplicação de template rodando nesse vídeo; espere terminar")
-    item = lixeira.excluir_corte(f)
+        item = lixeira.excluir_corte(f)
     recut.atualizar_indices(f.parent)
     return item
 
@@ -196,12 +195,16 @@ def restaurar(item_id):
     return item
 
 
+def entrada_publica(entrada):
+    """URL como está; arquivo local só pelo nome (a API não expõe caminhos do disco)."""
+    return entrada if re.match(r"https?://", entrada or "") else Path(entrada or "").name
+
+
 def item_publico(item):
     """Item da lixeira para a API: com a URL da miniatura, sem caminhos locais."""
     publico = {k: v for k, v in item.items() if k not in ("upload", "destino")}
     publico["thumb_url"] = f"/files/lixeira/{item['id']}/{item['thumb']}" if item.get("thumb") else None
-    if not publico["entrada"].startswith("http"):
-        publico["entrada"] = Path(publico["entrada"]).name
+    publico["entrada"] = entrada_publica(item["entrada"])
     return publico
 
 
@@ -275,10 +278,10 @@ class Handler(SimpleHTTPRequestHandler):
             if url.path == "/api/efeitos/sons":
                 return self.json(recut.listar_sons())
             if url.path == "/api/lixeira":
-                return self.json([item_publico(i) for i in lixeira.listar()])
+                return self.json({"retencao_dias": lixeira_mod.RETENCAO_DIAS,
+                                  "itens": [item_publico(i) for i in lixeira.listar()]})
             if url.path == "/api/lixeira/registro":
-                return self.json([{**h, "entrada": h["entrada"] if h["entrada"].startswith("http")
-                                   else Path(h["entrada"]).name} for h in lixeira.historico()])
+                return self.json([{**h, "entrada": entrada_publica(h["entrada"])} for h in lixeira.historico()])
             if url.path == "/api/agentes":
                 return self.json([nome for nome, _ in recut.agentes_disponiveis(os.getenv("RECUT_AGENTE", ""))])
             if partes[0] == "files":
@@ -293,7 +296,7 @@ class Handler(SimpleHTTPRequestHandler):
         """Serve cortes com suporte a Range (o <video> do navegador precisa para avançar)."""
         caminho = caminho.resolve()
         permitido = caminho.is_relative_to(JOBS.resolve()) or caminho.is_relative_to(LIXEIRA.resolve())
-        if not permitido or not caminho.is_file():
+        if not permitido or caminho.suffix.lower() not in ARQUIVOS_SERVIDOS or not caminho.is_file():
             raise FileNotFoundError(caminho)
         tamanho = caminho.stat().st_size
         ini, fim = 0, tamanho - 1
@@ -350,6 +353,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.json({"erro": "não encontrado"}, 404)
         except (ValueError, json.JSONDecodeError) as e:
             return self.json({"erro": str(e)}, 400)
+        except OSError as e:  # arquivo em uso no Windows e afins: resposta clara em vez de conexão quebrada
+            return self.json({"erro": f"não deu para concluir agora ({e.strerror or e}); tente de novo"}, 409)
         return self.json({"erro": "rota inexistente"}, 404)
 
     def upload(self, url):

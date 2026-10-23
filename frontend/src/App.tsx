@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Clapperboard, Copy, Download, Film, Palette, Radio, Scissors, Sparkles, Square, Trash2, Upload } from 'lucide-react'
 import { api, jobDoCorte, parseHoras, upload, type Corte, type Estrategia, type Job, type Template } from '@/api'
-import { Confirmar, Lixeira } from '@/lixeira'
+import { Confirmar, Lixeira, porDias, usePrazoLixeira } from '@/lixeira'
 import { PreviaTemplate, TIPO_MOMENTO, Templates } from '@/templates'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -311,11 +311,12 @@ function Campo({ label, valor, set, min, max, step = 1 }: { label: string; valor
 function ListaJobs({ jobs, onAtualizar, onAbrir }: { jobs: Job[] | null; onAtualizar: () => void; onAbrir: (c: Corte) => void }) {
   const [detalhe, setDetalhe] = useState<Job | null>(null)
   const [excluindo, setExcluindo] = useState<Job | null>(null)
+  const prazo = usePrazoLixeira()
 
   async function excluir(j: Job) {
     try {
       await api.excluirJob(j.id)
-      toast.success('Vídeo movido para a lixeira', { description: 'Dá para restaurar pela aba Lixeira por 30 dias.' })
+      toast.success('Vídeo movido para a lixeira', { description: `Dá para restaurar pela aba Lixeira ${porDias(prazo)}.` })
       setExcluindo(null)
       onAtualizar()
     } catch (e) {
@@ -399,7 +400,7 @@ function ListaJobs({ jobs, onAtualizar, onAbrir }: { jobs: Job[] | null; onAtual
       <Confirmar
         aberto={excluindo !== null}
         titulo="Mover o vídeo para a lixeira?"
-        descricao={`"${excluindo ? nomeEntrada(excluindo.entrada) : ''}" e seus ${excluindo?.cortes.length ?? 0} cortes vão para a lixeira. Dá para restaurar por 30 dias; depois são apagados de vez.`}
+        descricao={`"${excluindo ? nomeEntrada(excluindo.entrada) : ''}" e seus ${excluindo?.cortes.length ?? 0} cortes vão para a lixeira. Dá para restaurar ${porDias(prazo)}; depois são apagados de vez.`}
         acao="Mover para a lixeira"
         perigo
         onConfirmar={async () => { if (excluindo) await excluir(excluindo) }}
@@ -448,11 +449,12 @@ function DialogCorte({ corte, templates, onFechar, onAplicado }: {
   const [novo, setNovo] = useState('')
   const [aplicando, setAplicando] = useState(false)
   const [excluir, setExcluir] = useState(false)
+  const prazo = usePrazoLixeira()
   async function moverParaLixeira() {
     if (!corte) return
     try {
       await api.excluirCorte(jobDoCorte(corte), corte.json)
-      toast.success('Corte movido para a lixeira', { description: 'Dá para restaurar pela aba Lixeira por 30 dias.' })
+      toast.success('Corte movido para a lixeira', { description: `Dá para restaurar pela aba Lixeira ${porDias(prazo)}.` })
       setExcluir(false)
       onAplicado()
     } catch (e) {
@@ -546,7 +548,7 @@ function DialogCorte({ corte, templates, onFechar, onAplicado }: {
       <Confirmar
         aberto={excluir}
         titulo="Mover o corte para a lixeira?"
-        descricao={`"${corte?.titulo ?? ''}" vai para a lixeira. Dá para restaurar por 30 dias; depois é apagado de vez.`}
+        descricao={`"${corte?.titulo ?? ''}" vai para a lixeira. Dá para restaurar ${porDias(prazo)}; depois é apagado de vez.`}
         acao="Mover para a lixeira"
         perigo
         onConfirmar={moverParaLixeira}
