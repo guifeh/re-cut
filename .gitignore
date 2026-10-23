@@ -1,0 +1,30 @@
+# ambiente Python
+.venv/
+__pycache__/
+*.pyc
+
+# dados gerados em runtime: vídeos baixados, uploads e cortes (podem ter conteúdo de terceiros)
+jobs/
+uploads/
+cortes/
+*.mp4
+*.mkv
+*.webm
+*.mov
+
+# frontend
+frontend/node_modules/
+frontend/dist/
+
+# segredos e configs locais
+.env
+.env.*
+*.local
+*.pem
+*.key
+
+# sistema / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
