@@ -29,6 +29,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import uuid
 from array import array
 from pathlib import Path
 
@@ -53,7 +54,16 @@ uma reação, uma explicação curta. Mudança de tom e pausa antes de uma frase
 Cada corte deve durar entre {dur_min} e {dur_max} segundos, começar no início de uma frase e terminar depois do payoff.
 Dê a cada corte uma nota viral de 0 a 10 com o motivo explicado; seja exigente, nota 8+ é rara.
 Escreva um título curto que prenda e a descrição do post a partir do que é falado no corte.
-Use exatamente os tempos (em segundos) das linhas da transcrição."""
+Use exatamente os tempos (em segundos) das linhas da transcrição.
+
+Em cada corte, marque também os momentos que pedem um efeito de edição:
+- risada: alguém ri ou algo é claramente engraçado;
+- reacao: surpresa, choque, grito, susto;
+- enfase: frase de efeito, número marcante ou afirmação forte;
+- punchline: o payoff de uma piada ou o desfecho de uma história;
+- virada: mudança brusca de assunto ou reviravolta.
+Para cada momento: t (segundo exato em que acontece, dentro do corte), tipo, intensidade de 1 a 3 e um emoji que
+combine. No máximo um momento a cada 4 segundos; se nada pede efeito, deixe a lista vazia."""
 
 ESQUEMA = {
     "type": "object",
@@ -70,8 +80,22 @@ ESQUEMA = {
                     "nota": {"type": "number"},
                     "motivo": {"type": "string"},
                     "hashtags": {"type": "array", "items": {"type": "string"}},
+                    "momentos": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "t": {"type": "number"},
+                                "tipo": {"type": "string", "enum": ["risada", "reacao", "enfase", "punchline", "virada"]},
+                                "intensidade": {"type": "integer"},
+                                "emoji": {"type": "string"},
+                            },
+                            "required": ["t", "tipo", "intensidade", "emoji"],
+                            "additionalProperties": False,
+                        },
+                    },
                 },
-                "required": ["inicio", "fim", "titulo", "descricao", "nota", "motivo", "hashtags"],
+                "required": ["inicio", "fim", "titulo", "descricao", "nota", "motivo", "hashtags", "momentos"],
                 "additionalProperties": False,
             },
         }
@@ -89,6 +113,21 @@ ANIMACOES = ("nenhuma", "pop", "fade")
 # fontes que o libass acha no Windows via DirectWrite; uma fonte ausente vira Arial sem aviso
 FONTES = ("Arial", "Arial Black", "Impact", "Segoe UI Black", "Verdana", "Georgia", "Comic Sans MS", "Trebuchet MS")
 POSICOES_LOGO = ("topo-direita", "topo-esquerda", "base-direita", "base-esquerda")
+# momentos marcados pela IA e o que o template pode fazer em cada um (no cut.pro: auto_zoom, sfx, emojis)
+TIPOS_MOMENTO = ("risada", "reacao", "enfase", "punchline", "virada")
+EFEITOS = ("zoom", "som", "emoji", "flash")
+SONS = Path(__file__).with_name("efeitos")
+ID_SOM = r"[a-z0-9-]{1,40}(/[a-z0-9-]{1,40})?"  # "nome" (categoria geral) ou "categoria/nome"
+# sons padrão gerados pelo próprio ffmpeg (sem arquivo de terceiros); os seus vão em efeitos/<categoria>/<nome>.wav|mp3
+SONS_PADRAO = {  # "<categoria>/<nome>": fonte lavfi; vira efeitos/<categoria>/<nome>.wav
+    "transicao/whoosh": "anoisesrc=d=0.6:c=pink:a=0.7,highpass=f=400,lowpass=f=4000,afade=t=in:d=0.3,afade=t=out:st=0.3:d=0.3,volume=4",
+    "impacto/boom": "aevalsrc='0.7*sin(2*PI*(90-55*t)*t)*exp(-4.5*t)+0.25*(random(0)*2-1)*exp(-30*t)':d=0.9",
+    "cartoon/pop": "aevalsrc='0.8*sin(2*PI*(1200-5000*t)*t)*exp(-28*t)':d=0.15",
+    "interface/ding": "aevalsrc='0.5*sin(2*PI*1320*t)*exp(-3.5*t)+0.25*sin(2*PI*2640*t)*exp(-5*t)':d=1.2",
+    "comedia/ba-dum-tss": ("aevalsrc='if(lt(t\\,0.15)\\,0.9*sin(2*PI*130*t)*exp(-22*t)\\,0)"
+               "+if(between(t\\,0.18\\,0.36)\\,0.9*sin(2*PI*95*(t-0.18))*exp(-22*(t-0.18))\\,0)"
+               "+if(gt(t\\,0.42)\\,0.45*(random(0)*2-1)*exp(-7*(t-0.42))\\,0)':d=1.1"),
+}
 TEMPLATE_PADRAO = {
     "nome": "classico",
     "descricao": "",
@@ -105,6 +144,15 @@ TEMPLATE_PADRAO = {
     },
     "titulo": {"ativo": False, "segundos": 3, "tamanho": 60, "cor": "#000000", "fundo_cor": "#FFFFFF", "posicao_y": 14},
     "logo": {"arquivo": "", "largura": 18, "posicao": "topo-direita"},
+    "efeitos": {
+        "ativo": False,
+        "intensidade_min": 2,
+        "zoom": 1.3,
+        "regras": {"risada": ["emoji", "som"], "reacao": ["zoom", "emoji"], "enfase": ["zoom"],
+                   "punchline": ["zoom", "som"], "virada": ["flash", "som"]},
+        "sons": {"risada": "comedia/ba-dum-tss", "reacao": "cartoon/pop", "enfase": "cartoon/pop",
+                 "punchline": "impacto/boom", "virada": "transicao/whoosh"},
+    },
 }
 _ASS_FORMATO = ("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
                 "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
@@ -122,26 +170,29 @@ def normalizar_template(dados):
     """Mescla sobre o padrão e valida; levanta ValueError com a mensagem para o usuário."""
     t = json.loads(json.dumps(TEMPLATE_PADRAO))
     for k, v in (dados or {}).items():
+        if k == "efeitos" and isinstance(v, dict) and isinstance(v.get("sons"), dict):
+            v = {**v, "sons": {**t["efeitos"]["sons"], **v["sons"]}}
         if isinstance(t.get(k), dict) and isinstance(v, dict):
             t[k].update({kk: vv for kk, vv in v.items() if kk in t[k]})
         elif k in t:
             t[k] = v
     t["nome"] = slug(str(t["nome"]))
     t["descricao"] = str(t["descricao"])[:300]
-    leg, tit, logo = t["legenda"], t["titulo"], t["logo"]
+    leg, tit, logo, efe = t["legenda"], t["titulo"], t["logo"], t["efeitos"]
     # (dict, campo, tipo, mínimo, máximo): o valor convertido substitui o enviado, então "6,0\nDialogue..."
     # não passa como número nem entra cru na linha Style do ASS
     numeros = [(t, "velocidade", float, 0.5, 2), (leg, "palavras_por_grupo", int, 1, 12), (leg, "pausa_max", float, 0, 5),
                (leg, "tamanho", int, 20, 200), (leg, "contorno", int, 0, 20), (leg, "sombra", int, 0, 10),
                (leg, "fundo_opacidade", int, 0, 100), (leg, "posicao_y", float, 0, 100), (tit, "segundos", float, 0, 60),
-               (tit, "tamanho", int, 20, 200), (tit, "posicao_y", float, 0, 100), (logo, "largura", float, 5, 60)]
+               (tit, "tamanho", int, 20, 200), (tit, "posicao_y", float, 0, 100), (logo, "largura", float, 5, 60),
+               (efe, "intensidade_min", int, 1, 3), (efe, "zoom", float, 1.05, 2)]
     for d, campo, tipo, minimo, maximo in numeros:
         valor = d[campo]
         if isinstance(valor, bool) or not isinstance(valor, (int, float)) or not minimo <= valor <= maximo:
             raise ValueError(f"{campo.replace('_', ' ')} deve ser um número entre {minimo} e {maximo}")
         d[campo] = tipo(valor)
     for d, campo in [(leg, "ativa"), (leg, "respeitar_pontuacao"), (leg, "negrito"), (leg, "italico"),
-                     (leg, "maiusculas"), (leg, "fundo"), (leg, "destaque"), (tit, "ativo")]:
+                     (leg, "maiusculas"), (leg, "fundo"), (leg, "destaque"), (tit, "ativo"), (efe, "ativo")]:
         if not isinstance(d[campo], bool):
             raise ValueError(f"{campo.replace('_', ' ')} deve ser verdadeiro ou falso")
     cores = (leg["cor"], leg["contorno_cor"], leg["fundo_cor"], leg["destaque_cor"], tit["cor"], tit["fundo_cor"])
@@ -153,6 +204,12 @@ def normalizar_template(dados):
         (all(isinstance(c, str) and re.fullmatch(r"#[0-9A-Fa-f]{6}", c) for c in cores), "cores no formato #RRGGBB"),
         (logo["posicao"] in POSICOES_LOGO, "posição do logo inválida"),
         (isinstance(logo["arquivo"], str), "arquivo do logo inválido"),
+        (isinstance(efe["regras"], dict) and set(efe["regras"]) <= set(TIPOS_MOMENTO) and all(
+            isinstance(v, list) and set(v) <= set(EFEITOS) for v in efe["regras"].values()),
+         f"efeitos: regras por tipo ({', '.join(TIPOS_MOMENTO)}) com efeitos entre {', '.join(EFEITOS)}"),
+        (isinstance(efe["sons"], dict) and set(efe["sons"]) <= set(TIPOS_MOMENTO) and all(
+            isinstance(v, str) and re.fullmatch(ID_SOM, v) for v in efe["sons"].values()),
+         "efeitos: som deve ser 'categoria/nome' de um arquivo em efeitos/ (minúsculas, números e hífen)"),
     ]
     for ok, msg in regras:
         if not ok:
@@ -168,6 +225,33 @@ def carregar_template(nome):
     if not arquivo.is_file():
         raise ValueError(f"template '{nome}' não encontrado")
     return normalizar_template(json.loads(arquivo.read_text(encoding="utf-8")))
+
+
+def limpar_momentos(momentos, inicio, fim, espaco=2.0):
+    """Momentos válidos dentro do corte, intensidade 1-3, sem dois colados (fica o mais intenso)."""
+    bons = []
+    for m in momentos or []:
+        try:
+            t, tipo, inten = float(m["t"]), m["tipo"], int(m["intensidade"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if tipo in TIPOS_MOMENTO and inicio <= t <= fim:
+            emoji = re.sub(r"[{}\\\n\r]", "", str(m.get("emoji", "")))[:8]
+            bons.append({"t": round(t, 2), "tipo": tipo, "intensidade": min(3, max(1, inten)), "emoji": emoji})
+    finais = []
+    for m in sorted(bons, key=lambda m: (-m["intensidade"], m["t"])):
+        if all(abs(m["t"] - f["t"]) >= espaco for f in finais):
+            finais.append(m)
+    return sorted(finais, key=lambda m: m["t"])
+
+
+def plano_efeitos(momentos, tpl, inicio):
+    """(t relativo ao corte, efeito, momento) que o template manda aplicar."""
+    efe = tpl["efeitos"]
+    if not efe["ativo"]:
+        return []
+    return [(round(m["t"] - inicio, 2), efeito, m) for m in momentos if m["intensidade"] >= efe["intensidade_min"]
+            for efeito in efe["regras"].get(m["tipo"], [])]
 
 
 def palavras_do_corte(palavras, inicio, fim):
@@ -194,8 +278,9 @@ def agrupar_palavras(ws, por_grupo, pausa_max, pontuacao):
     return grupos + ([atual] if atual else [])
 
 
-def legenda_ass(palavras, inicio, fim, tpl=None, titulo=""):
-    """Legenda e título do corte no estilo do template; tempos relativos ao corte e ajustados à velocidade."""
+def legenda_ass(palavras, inicio, fim, tpl=None, titulo="", plano=()):
+    """Legenda, título e figurinhas de emoji do corte no estilo do template; tempos relativos ao corte e
+    ajustados à velocidade. `plano` vem de plano_efeitos (tempos já relativos ao corte)."""
     tpl = tpl or normalizar_template({})
     W, H = PROPORCOES[tpl["proporcao"]]
     leg, tit, vel = tpl["legenda"], tpl["titulo"], tpl["velocidade"]
@@ -207,6 +292,9 @@ def legenda_ass(palavras, inicio, fim, tpl=None, titulo=""):
         f"{3 if caixa else 1},{12 if caixa else leg['contorno']},{0 if caixa else leg['sombra']},5,60,60,0,1",
         f"Style: Titulo,{leg['fonte']},{tit['tamanho']},{cor_ass(tit['cor'])},{cor_ass(tit['cor'])},"
         f"{cor_ass(tit['fundo_cor'])},{cor_ass(tit['fundo_cor'])},-1,0,0,0,100,100,0,0,3,14,0,5,80,80,0,1",
+        # o libass desenha emoji em uma cor só: vira figurinha amarela com contorno grosso
+        f"Style: Emoji,Segoe UI Emoji,{round(min(W, H) * 0.2)},{cor_ass('#FFD43B')},{cor_ass('#FFD43B')},"
+        f"{cor_ass('#000000')},{cor_ass('#000000', 50)},0,0,0,0,100,100,0,0,1,7,3,5,0,0,0,1",
     ]
 
     def t(seg):
@@ -223,6 +311,12 @@ def legenda_ass(palavras, inicio, fim, tpl=None, titulo=""):
     if tit["ativo"] and titulo:
         fim_tit = fim if not tit["segundos"] else min(fim, inicio + float(tit["segundos"]) * vel)
         eventos.append(f"Dialogue: 1,{t(inicio)},{t(fim_tit)},Titulo,,0,0,0,,{{{pos(tit['posicao_y'])}}}{limpar(titulo)}")
+    emojis = [(rel, m["emoji"]) for rel, efeito, m in plano if efeito == "emoji" and m["emoji"]]
+    for k, (rel, emoji) in enumerate(emojis):  # alterna os lados para não cobrir sempre o mesmo ponto
+        x, giro = (round(W * 0.76), -12) if k % 2 == 0 else (round(W * 0.24), 12)
+        eventos.append(f"Dialogue: 2,{ts_ass(rel / vel)},{ts_ass((rel + 1.3) / vel)},Emoji,,0,0,0,,"
+                       f"{{\\an5\\pos({x},{round(H * 0.3)})\\frz{giro}\\fscx40\\fscy40"
+                       f"\\t(0,140,\\fscx115\\fscy115)\\t(140,240,\\fscx100\\fscy100)\\fad(0,200)}}{emoji}")
     if leg["ativa"]:
         ws = palavras_do_corte(palavras, inicio, fim)
         grupos = agrupar_palavras(ws, int(leg["palavras_por_grupo"]), float(leg["pausa_max"]), leg["respeitar_pontuacao"])
@@ -287,9 +381,42 @@ def comandos_crop(trajetoria, passo, iw, w, hz=10):
     return "\n".join(linhas) + "\n"
 
 
-def filtro_video(tpl, iw, ih, nome, x=None, seguir=False, com_logo=False):
+def ancora_zoom(t, xs, ys, passo, iw, ih, W, H, modo, crop_x=None):
+    """(ax, ay) de 0 a 1 no quadro final para onde o zoom do instante t (relativo ao corte) deve mirar:
+    a amostra de rosto mais próxima, convertida pelo enquadramento. Sem rosto perto: centro, um pouco acima."""
+    perto = sorted((abs(i * passo - t), i) for i, x in enumerate(xs) if x is not None and abs(i * passo - t) <= 1.5)
+    if not perto:
+        return 0.5, 0.45
+    i = perto[0][1]
+    fx, fy = xs[i], ys[i] * ih
+    if modo == "ajustar":  # vídeo inteiro encaixado no meio do quadro
+        k = min(W / iw, H / ih)
+        ox, oy = (W - iw * k) / 2, (H - ih * k) / 2
+        ax, ay = (ox + fx * k) / W, (oy + fy * k) / H
+    elif crop_x is not None:  # recorte da largura (altura inteira)
+        ax, ay = (fx - crop_x) / (int(ih * W / H) // 2 * 2), fy / ih  # mesma largura par de recorte_vertical
+    else:  # fonte mais estreita que o destino: recorte da altura, centralizado
+        h = iw * H / W
+        ax, ay = fx / iw, (fy - (ih - h) / 2) / h
+    return round(min(1, max(0, ax)), 3), round(min(1, max(0, ay)), 3)
+
+
+def expr_por_momento(zooms, indice, padrao):
+    """Expressão que vale zooms[i][indice] perto de cada momento e `padrao` fora deles (momentos ficam 2s+ apart)."""
+    termos = "".join(f"{z[indice] - padrao:+.3f}*between(it\\,{z[0] - 0.15:.2f}\\,{z[0] + 1.2:.2f})" for z in zooms)
+    return f"{padrao}{termos}"
+
+
+def expr_zoom(tempos, fator):
+    """Expressão do zoompan: entra rápido no momento (punch-in de 80 ms), segura e sai em 200 ms."""
+    termos = "+".join(f"clip((it-{t - 0.06:.2f})/0.08\\,0\\,1)*clip(({t + 0.9:.2f}-it)/0.2\\,0\\,1)" for t in tempos)
+    return f"1+{fator - 1:.3f}*min(1\\,{termos})"
+
+
+def filtro_video(tpl, iw, ih, nome, x=None, seguir=False, com_logo=False, zooms=(), flashes=(), com_emoji=False):
     """filter_complex do ffmpeg para o template. x: posição do recorte (None = centro); com seguir=True
-    ele é só o primeiro quadro e o resto vem do arquivo <nome>.cmd via sendcmd."""
+    ele é só o primeiro quadro e o resto vem do arquivo <nome>.cmd via sendcmd. zooms: (t, ax, ay) com t em
+    segundos relativos ao corte e (ax, ay) o rosto no quadro final (ancora_zoom); flashes: segundos."""
     W, H = PROPORCOES[tpl["proporcao"]]
     modo = tpl["enquadramento"]
     rec = recorte_vertical(iw / 2, iw, ih, W / H)
@@ -303,9 +430,18 @@ def filtro_video(tpl, iw, ih, nome, x=None, seguir=False, com_logo=False):
         v = f"[0:v]sendcmd=f={nome}.cmd,crop@rosto={rec[1]}:{ih}:{rec[0] if x is None else x}:0,scale={W}:{H}"
     else:
         v = f"[0:v]crop={rec[1]}:{ih}:{rec[0] if x is None else x}:0,scale={W}:{H}"
+    if zooms:  # fps=30 antes: o zoompan gera 1 quadro por quadro de entrada no fps pedido; fixar evita mudar a duração
+        ax, ay = expr_por_momento(zooms, 1, 0.5), expr_por_momento(zooms, 2, 0.45)
+        z = expr_zoom([t for t, _, _ in zooms], tpl["efeitos"]["zoom"])
+        v += (f",fps=30,zoompan=z='{z}'"
+              f":x='max(0\\,min(iw-iw/zoom\\,iw*({ax})-iw/zoom/2))'"
+              f":y='max(0\\,min(ih-ih/zoom\\,ih*({ay})-ih/zoom/2))':d=1:s={W}x{H}:fps=30")
+    for t in flashes:  # transição de "virada": clarão branco rápido
+        v += (f",drawbox=x=0:y=0:w=iw:h=ih:color=white@0.8:t=fill:enable='between(t\\,{t:.2f}\\,{t + 0.06:.2f})'"
+              f",drawbox=x=0:y=0:w=iw:h=ih:color=white@0.35:t=fill:enable='between(t\\,{t + 0.06:.2f}\\,{t + 0.18:.2f})'")
     if tpl["velocidade"] != 1:
         v += f",setpts=PTS/{tpl['velocidade']}"
-    if tpl["legenda"]["ativa"] or tpl["titulo"]["ativo"]:
+    if tpl["legenda"]["ativa"] or tpl["titulo"]["ativo"] or com_emoji:
         v += f",subtitles={nome}.ass"
     if not com_logo:
         return v + "[out]"
@@ -314,6 +450,21 @@ def filtro_video(tpl, iw, ih, nome, x=None, seguir=False, com_logo=False):
     x, y = {"topo-direita": (f"W-w-{m}", m), "topo-esquerda": (m, m),
             "base-direita": (f"W-w-{m}", f"H-h-{m}"), "base-esquerda": (m, f"H-h-{m}")}[tpl["logo"]["posicao"]]
     return f"{v}[v];[1:v]scale={lw}:-1[lg];[v][lg]overlay={x}:{y}[out]"
+
+
+def filtro_audio(tempos, primeiro_indice, velocidade):
+    """Mixa os efeitos sonoros no áudio do corte. tempos: segundos relativos ao corte, um input do ffmpeg
+    por som a partir de `primeiro_indice`. None quando não há som (o áudio segue direto)."""
+    if not tempos:
+        return None
+    partes = ["[0:a]aresample=44100[a0]"]
+    for k, t in enumerate(tempos):
+        ms = max(0, round(t * 1000))
+        partes.append(f"[{primeiro_indice + k}:a]aresample=44100,adelay={ms}:all=1,volume=0.9[s{k}]")
+    entradas = "[a0]" + "".join(f"[s{k}]" for k in range(len(tempos)))
+    tempo = f",atempo={velocidade}" if velocidade != 1 else ""
+    partes.append(f"{entradas}amix=inputs={len(tempos) + 1}:normalize=0:duration=first{tempo},alimiter=limit=0.95[aout]")
+    return ";".join(partes)
 
 
 def energia_relativa(rms, inicio, fim):
@@ -469,7 +620,7 @@ def trajetoria_do_rosto(video, inicio, fim, passo=PASSO_ROSTO):
     escala = min(1.0, 640 / iw)  # detectar em 640px é bem mais rápido e basta para rosto
     det = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     cap.set(cv2.CAP_PROP_POS_MSEC, inicio * 1000)
-    xs = []
+    xs, ys = [], []
     for _ in range(int((fim - inicio) / passo) + 1):
         ok, frame = cap.read()
         for _ in range(pular - 1):  # grab() só avança, sem converter o quadro
@@ -479,12 +630,54 @@ def trajetoria_do_rosto(video, inicio, fim, passo=PASSO_ROSTO):
         cinza = cv2.cvtColor(cv2.resize(frame, None, fx=escala, fy=escala), cv2.COLOR_BGR2GRAY)
         rostos = det.detectMultiScale(cinza, 1.2, 5, minSize=(40, 40))
         if len(rostos):
-            x, _, w, _ = max(rostos, key=lambda r: r[2] * r[3])
+            x, y, w, h = max(rostos, key=lambda r: r[2] * r[3])
             xs.append((x + w / 2) / escala)
+            ys.append((y + h / 2) / escala / ih)
         else:
             xs.append(None)
+            ys.append(None)
     cap.release()
-    return xs, iw, ih
+    return xs, ys, iw, ih
+
+
+def garantir_sons():
+    """Cria efeitos/<categoria>/ com os sons padrão (gerados pelo ffmpeg) na primeira vez."""
+    for som_id, fonte in SONS_PADRAO.items():
+        destino = SONS / f"{som_id}.wav"
+        if not destino.is_file():
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            tmp = destino.with_name(f".{destino.stem}.{uuid.uuid4().hex}.wav")  # único por chamada (threads do servidor)
+            subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", fonte, "-ar", "44100", str(tmp)],
+                           check=True)
+            os.replace(tmp, destino)
+
+
+def listar_sons():
+    """Biblioteca de sons por categoria: efeitos/<categoria>/<nome>.wav|mp3; soltos na raiz = 'geral'."""
+    garantir_sons()
+    sons = []
+    for f in sorted([*SONS.glob("*.*"), *SONS.glob("*/*.*")]):
+        som_id = f.relative_to(SONS).with_suffix("").as_posix()
+        if f.suffix.lower() in (".wav", ".mp3") and re.fullmatch(ID_SOM, som_id):
+            categoria = som_id.split("/")[0] if "/" in som_id else "geral"
+            sons.append({"id": som_id, "categoria": categoria, "nome": f.stem})
+    return sons
+
+
+def arquivo_som(som_id):
+    """Caminho do som pelo id, só dentro de efeitos/ (o id já é validado no template)."""
+    if not re.fullmatch(ID_SOM, som_id or ""):
+        return None
+    for f in (SONS / f"{som_id}.wav", SONS / f"{som_id}.mp3"):
+        if f.is_file() and f.resolve().is_relative_to(SONS.resolve()):
+            return f
+    return None
+
+
+def tem_audio(video):
+    """O vídeo tem trilha de áudio? (o ffmpeg lista os streams no stderr ao abrir o arquivo)"""
+    r = subprocess.run([FFMPEG, "-hide_banner", "-i", str(video)], capture_output=True, text=True, errors="replace")
+    return re.search(r"Stream #\d+:\d+.*: Audio:", r.stderr) is not None
 
 
 def tamanho_video(video):
@@ -501,31 +694,62 @@ def renderizar(video, c, palavras, saida, nome, tpl=None):
     dur, vel = c["fim"] - c["inicio"], tpl["velocidade"]
     modo = tpl["enquadramento"]
     x, seguir = None, False
-    if modo in ("rosto", "rosto_fixo"):
-        xs, iw, ih = trajetoria_do_rosto(video, c["inicio"], c["fim"])
-        rec = recorte_vertical(iw / 2, iw, ih, W / H)
-        if rec:
-            w = rec[1]
-            trajetoria = suavizar_trajetoria(xs, iw / 2, zona_morta=0.06 * w)
-            seguir = modo == "rosto"
-            if seguir:
-                (saida / f"{nome}.cmd").write_text(comandos_crop(trajetoria, PASSO_ROSTO, iw, w), encoding="utf-8")
-            # rosto: x do primeiro quadro; rosto_fixo (DisableCameraMotion): onde o rosto mais ficou
-            x = recorte_vertical(trajetoria[0] if seguir else statistics.median(trajetoria), iw, ih, W / H)[0]
+    plano = plano_efeitos(c.get("momentos", []), tpl, c["inicio"])
+    por_efeito = {e: [(rel, m) for rel, efeito, m in plano if efeito == e] for e in EFEITOS}
+    tempos_zoom = [rel for rel, _ in por_efeito["zoom"]]
+    if modo in ("rosto", "rosto_fixo") or tempos_zoom:  # o zoom mira o rosto em qualquer enquadramento
+        xs, ys, iw, ih = trajetoria_do_rosto(video, c["inicio"], c["fim"])
     else:
-        iw, ih = tamanho_video(video)
+        (iw, ih), xs, ys = tamanho_video(video), [], []
+    rec = recorte_vertical(iw / 2, iw, ih, W / H)
+    trajetoria = suavizar_trajetoria(xs, iw / 2, zona_morta=0.06 * rec[1]) if rec and xs else []
+    if modo in ("rosto", "rosto_fixo") and rec:
+        seguir = modo == "rosto"
+        if seguir:
+            (saida / f"{nome}.cmd").write_text(comandos_crop(trajetoria, PASSO_ROSTO, iw, rec[1]), encoding="utf-8")
+        # rosto: x do primeiro quadro; rosto_fixo (DisableCameraMotion): onde o rosto mais ficou
+        x = recorte_vertical(trajetoria[0] if seguir else statistics.median(trajetoria), iw, ih, W / H)[0]
+
+    def crop_x_em(t):  # x do recorte no instante t, do jeito que o filtro vai cortar
+        if modo == "ajustar" or not rec:
+            return None
+        if seguir:
+            return recorte_vertical(trajetoria[min(round(t / PASSO_ROSTO), len(trajetoria) - 1)], iw, ih, W / H)[0]
+        return rec[0] if x is None else x
+
+    zooms = [(t, *ancora_zoom(t, xs, ys, PASSO_ROSTO, iw, ih, W, H, modo, crop_x_em(t))) for t in tempos_zoom]
     logo = tpl["logo"]["arquivo"]
     com_logo = bool(logo) and Path(logo).is_file()
     if logo and not com_logo:
         print(f"  logo não encontrado ({logo}); seguindo sem logo", file=sys.stderr)
-    (saida / f"{nome}.ass").write_text(legenda_ass(palavras, c["inicio"], c["fim"], tpl, c.get("titulo", "")),
+    (saida / f"{nome}.ass").write_text(legenda_ass(palavras, c["inicio"], c["fim"], tpl, c.get("titulo", ""), plano),
                                        encoding="utf-8")
+    sons, pedidos_som = [], por_efeito["som"]
+    if pedidos_som and not tem_audio(video):  # sem trilha não há onde mixar ([0:a] não existiria)
+        print("  vídeo sem áudio; seguindo sem os sons de efeito", file=sys.stderr)
+        pedidos_som = []
+    if pedidos_som:
+        garantir_sons()
+    for rel, m in pedidos_som:
+        arq = arquivo_som(tpl["efeitos"]["sons"].get(m["tipo"], ""))
+        if arq:
+            sons.append((rel, arq))
+        else:
+            print(f"  som de '{m['tipo']}' não encontrado em efeitos/; seguindo sem ele", file=sys.stderr)
     args = [FFMPEG, "-v", "error", "-y", "-ss", f"{c['inicio']:.2f}", "-t", f"{dur:.2f}", "-i", str(Path(video).resolve())]
     if com_logo:
         args += ["-i", str(Path(logo).resolve())]
-    args += ["-filter_complex", filtro_video(tpl, iw, ih, nome, x, seguir, com_logo), "-map", "[out]", "-map", "0:a?"]
-    if vel != 1:
-        args += ["-af", f"atempo={vel}"]
+    for _, arq in sons:
+        args += ["-i", str(arq.resolve())]
+    grafo = filtro_video(tpl, iw, ih, nome, x, seguir, com_logo,
+                         zooms=zooms, flashes=[rel for rel, _ in por_efeito["flash"]], com_emoji=bool(por_efeito["emoji"]))
+    audio = filtro_audio([rel for rel, _ in sons], 2 if com_logo else 1, vel)
+    if audio:
+        args += ["-filter_complex", f"{grafo};{audio}", "-map", "[out]", "-map", "[aout]"]
+    else:
+        args += ["-filter_complex", grafo, "-map", "[out]", "-map", "0:a?"]
+        if vel != 1:
+            args += ["-af", f"atempo={vel}"]
     # cwd=saida: caminhos relativos nos filtros evitam o escape de "C:" no Windows
     subprocess.run(args + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", f"{nome}.mp4"],
                    cwd=saida, check=True)
@@ -604,6 +828,7 @@ def processar(video, saida, prefixo, cfg):
     feitos = []
     for i, c in enumerate(cortes, 1):
         nome = f"{prefixo}_corte{i:02d}"
+        c["momentos"] = limpar_momentos(c.get("momentos"), c["inicio"], c["fim"])
         print(f"[{prefixo}] {nome} nota {c['nota']:.1f}: {c['titulo']}")
         renderizar(video, c, palavras, saida, nome, cfg["template"])
         c = {**c, "arquivo": f"{nome}.mp4", "thumbnail": f"{nome}.jpg", "lote": prefixo, "template": cfg["template"]["nome"],

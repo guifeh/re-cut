@@ -194,3 +194,85 @@ def test_atualizar_indices_nao_derruba_a_live(tmp_path, capsys):
     (tmp_path / "lote_0000_corte01.json").write_text(json.dumps({"arquivo": "a.mp4", "nota": 7}))
     atualizar_indices(tmp_path, {"titulo": "live"})  # primeira gravação da live cria o índice com o cabeçalho
     assert json.loads((tmp_path / "cortes.json").read_text())["cortes"] == [{"arquivo": "a.mp4", "nota": 7}]
+
+
+def test_limpar_momentos():
+    from recut import limpar_momentos
+    brutos = [{"t": 12, "tipo": "risada", "intensidade": 5, "emoji": "😂{x}"},   # intensidade presa em 3, chaves fora
+              {"t": 12.8, "tipo": "reacao", "intensidade": 1, "emoji": "😱"},  # colado e mais fraco: sai
+              {"t": 99, "tipo": "risada", "intensidade": 2, "emoji": ""},      # fora do corte
+              {"t": 15, "tipo": "meme", "intensidade": 2, "emoji": ""},        # tipo inválido
+              {"tipo": "enfase"},                                              # sem t
+              {"t": 20, "tipo": "enfase", "intensidade": 2, "emoji": "🔥"}]
+    assert limpar_momentos(brutos, 10, 30) == [{"t": 12.0, "tipo": "risada", "intensidade": 3, "emoji": "😂x"},
+                                               {"t": 20.0, "tipo": "enfase", "intensidade": 2, "emoji": "🔥"}]
+    assert limpar_momentos(None, 0, 10) == []
+
+
+def test_plano_efeitos():
+    from recut import plano_efeitos
+    ms = [{"t": 12.0, "tipo": "punchline", "intensidade": 3, "emoji": "😂"},
+          {"t": 20.0, "tipo": "risada", "intensidade": 1, "emoji": "🤣"}]
+    assert plano_efeitos(ms, normalizar_template({}), 10) == []  # efeitos desligados por padrão
+    tpl = normalizar_template({"efeitos": {"ativo": True, "intensidade_min": 2}})
+    assert [(t, e) for t, e, _ in plano_efeitos(ms, tpl, 10)] == [(2.0, "zoom"), (2.0, "som")]  # risada fraca não entra
+    with pytest.raises(ValueError):
+        normalizar_template({"efeitos": {"regras": {"risada": ["explosao"]}}})
+    with pytest.raises(ValueError):
+        normalizar_template({"efeitos": {"sons": {"risada": "../../segredo"}}})
+
+
+def test_efeitos_no_filtro():
+    from recut import expr_zoom, filtro_audio
+    tpl = normalizar_template({"efeitos": {"ativo": True}})
+    assert expr_zoom([2.0], 1.3) == r"1+0.300*min(1\,clip((it-1.94)/0.08\,0\,1)*clip((2.90-it)/0.2\,0\,1))"
+    v = filtro_video(tpl, 1920, 1080, "c1", x=100, zooms=[(2.0, 0.6, 0.3)], flashes=[6.0], com_emoji=True)
+    assert ",fps=30,zoompan=" in v and r"between(t\,6.00\,6.06)" in v
+    # a mira vale a âncora do rosto perto do momento e o centro fora dele
+    assert r"iw*(0.5+0.100*between(it\,1.85\,3.20))" in v and r"ih*(0.45-0.150*between(it\,1.85\,3.20))" in v
+    assert v.index("zoompan") < v.index("drawbox") < v.index("subtitles=")  # efeitos antes da legenda
+    assert "zoompan" not in filtro_video(tpl, 1920, 1080, "c1")
+    assert filtro_audio([], 1, 1) is None
+    a = filtro_audio([2.0, 6.5], 2, 1.1)
+    assert "[2:a]aresample=44100,adelay=2000:all=1" in a and "[3:a]aresample=44100,adelay=6500:all=1" in a
+    assert a.endswith("amix=inputs=3:normalize=0:duration=first,atempo=1.1,alimiter=limit=0.95[aout]")
+
+
+def test_ancora_zoom_mira_o_rosto_no_quadro_final():
+    from recut import ancora_zoom
+    xs, ys = [None, 900, 960, None], [None, 0.3, 0.32, None]
+    # recorte de 606px começando em 657: rosto em x=960 fica no meio do quadro, na altura em que está
+    assert ancora_zoom(1.0, xs, ys, 0.5, 1920, 1080, 1080, 1920, "centro", 657) == (0.5, 0.32)
+    # vídeo inteiro encaixado (ajustar): a altura do rosto é convertida para dentro da faixa do meio
+    assert ancora_zoom(1.0, xs, ys, 0.5, 1920, 1080, 1080, 1920, "ajustar") == (0.5, 0.443)
+    # sem rosto perto do momento: centro, um pouco acima
+    assert ancora_zoom(9.0, xs, ys, 0.5, 1920, 1080, 1080, 1920, "centro", 657) == (0.5, 0.45)
+    # rosto fora do recorte fica preso na borda
+    assert ancora_zoom(0.5, xs, ys, 0.5, 1920, 1080, 1080, 1920, "centro", 0)[0] == 1
+
+
+def test_sons_por_categoria(tmp_path, monkeypatch):
+    import recut
+    monkeypatch.setattr(recut, "SONS", tmp_path)
+    monkeypatch.setattr(recut, "SONS_PADRAO", {})  # não gera nada no teste
+    (tmp_path / "comedia").mkdir()
+    (tmp_path / "comedia" / "risada-1.wav").write_bytes(b"x")
+    (tmp_path / "solto.mp3").write_bytes(b"x")
+    (tmp_path / "Nome Invalido.wav").write_bytes(b"x")  # o template não aceitaria: não aparece
+    assert recut.listar_sons() == [{"id": "comedia/risada-1", "categoria": "comedia", "nome": "risada-1"},
+                                  {"id": "solto", "categoria": "geral", "nome": "solto"}]
+    assert recut.arquivo_som("comedia/risada-1") == tmp_path / "comedia" / "risada-1.wav"
+    assert recut.arquivo_som("../segredo") is None and recut.arquivo_som("") is None
+    t = normalizar_template({"efeitos": {"sons": {"risada": "comedia/risada-1"}}})
+    assert t["efeitos"]["sons"]["risada"] == "comedia/risada-1"
+    assert t["efeitos"]["sons"]["virada"] == "transicao/whoosh"  # sons parcial mescla com o padrão
+    for ruim in ("a/b/c", "../x", "Comedia/X"):
+        with pytest.raises(ValueError):
+            normalizar_template({"efeitos": {"sons": {"risada": ruim}}})
+
+
+def test_emoji_vira_figurinha_na_legenda():
+    tpl = normalizar_template({"efeitos": {"ativo": True}})
+    plano = [(4.0, "emoji", {"emoji": "😂"}), (8.0, "zoom", {"emoji": "🔥"})]
+    linhas = [l for l in legenda_ass([], 10, 30, tpl, "", plano).splitlines() if ",Emoji," in l]
+    assert len(linhas) == 1 and linhas[0].startswith("Dialogue: 2,0:00:04.00,0:00:05.30,Emoji") and linhas[0].endswith("😂")

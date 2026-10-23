@@ -28,3 +28,6 @@ frontend/dist/
 Thumbs.db
 .idea/
 .vscode/
+
+# sons de efeito: os padrão são gerados na primeira vez; os seus podem ter direitos de terceiros
+efeitos/
