@@ -1,0 +1,42 @@
+{
+  "nome": "caixa",
+  "descricao": "Texto em minúsculas sobre caixa escura translúcida. Limpo e fácil de ler em qualquer fundo.",
+  "proporcao": "9:16",
+  "enquadramento": "rosto",
+  "velocidade": 1.0,
+  "legenda": {
+    "ativa": true,
+    "palavras_por_grupo": 4,
+    "pausa_max": 0.5,
+    "respeitar_pontuacao": true,
+    "fonte": "Segoe UI Black",
+    "tamanho": 64,
+    "negrito": true,
+    "italico": false,
+    "maiusculas": false,
+    "cor": "#FFFFFF",
+    "contorno_cor": "#000000",
+    "contorno": 6,
+    "sombra": 2,
+    "fundo": true,
+    "fundo_cor": "#000000",
+    "fundo_opacidade": 65,
+    "destaque": false,
+    "destaque_cor": "#FFD700",
+    "posicao_y": 78,
+    "animacao": "fade"
+  },
+  "titulo": {
+    "ativo": false,
+    "segundos": 3,
+    "tamanho": 60,
+    "cor": "#000000",
+    "fundo_cor": "#FFFFFF",
+    "posicao_y": 14
+  },
+  "logo": {
+    "arquivo": "",
+    "largura": 18,
+    "posicao": "topo-direita"
+  }
+}

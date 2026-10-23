@@ -1,0 +1,42 @@
+{
+  "nome": "podcast",
+  "descricao": "Vídeo inteiro sobre fundo desfocado, sem cortar ninguém, com o título do corte no topo.",
+  "proporcao": "9:16",
+  "enquadramento": "ajustar",
+  "velocidade": 1.0,
+  "legenda": {
+    "ativa": true,
+    "palavras_por_grupo": 3,
+    "pausa_max": 0.5,
+    "respeitar_pontuacao": true,
+    "fonte": "Verdana",
+    "tamanho": 70,
+    "negrito": true,
+    "italico": false,
+    "maiusculas": true,
+    "cor": "#FFFFFF",
+    "contorno_cor": "#000000",
+    "contorno": 6,
+    "sombra": 2,
+    "fundo": false,
+    "fundo_cor": "#000000",
+    "fundo_opacidade": 70,
+    "destaque": true,
+    "destaque_cor": "#4ADE80",
+    "posicao_y": 76,
+    "animacao": "nenhuma"
+  },
+  "titulo": {
+    "ativo": true,
+    "segundos": 0,
+    "tamanho": 56,
+    "cor": "#000000",
+    "fundo_cor": "#FFFFFF",
+    "posicao_y": 18
+  },
+  "logo": {
+    "arquivo": "",
+    "largura": 18,
+    "posicao": "topo-direita"
+  }
+}

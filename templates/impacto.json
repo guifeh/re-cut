@@ -1,0 +1,42 @@
+{
+  "nome": "impacto",
+  "descricao": "Duas palavras por vez em Impact gigante, título de gancho nos 3 primeiros segundos e 10% mais rápido.",
+  "proporcao": "9:16",
+  "enquadramento": "rosto",
+  "velocidade": 1.1,
+  "legenda": {
+    "ativa": true,
+    "palavras_por_grupo": 2,
+    "pausa_max": 0.5,
+    "respeitar_pontuacao": true,
+    "fonte": "Impact",
+    "tamanho": 120,
+    "negrito": true,
+    "italico": false,
+    "maiusculas": true,
+    "cor": "#FFFFFF",
+    "contorno_cor": "#000000",
+    "contorno": 8,
+    "sombra": 2,
+    "fundo": false,
+    "fundo_cor": "#000000",
+    "fundo_opacidade": 70,
+    "destaque": true,
+    "destaque_cor": "#FF4D4D",
+    "posicao_y": 60,
+    "animacao": "pop"
+  },
+  "titulo": {
+    "ativo": true,
+    "segundos": 3,
+    "tamanho": 64,
+    "cor": "#FFFFFF",
+    "fundo_cor": "#E11D48",
+    "posicao_y": 16
+  },
+  "logo": {
+    "arquivo": "",
+    "largura": 18,
+    "posicao": "topo-direita"
+  }
+}

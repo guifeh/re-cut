@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Clapperboard, Copy, Download, Film, Radio, Scissors, Sparkles, Square, Upload } from 'lucide-react'
-import { api, parseHoras, upload, type Corte, type Estrategia, type Job } from '@/api'
+import { Clapperboard, Copy, Download, Film, Palette, Radio, Scissors, Sparkles, Square, Upload } from 'lucide-react'
+import { api, jobDoCorte, parseHoras, upload, type Corte, type Estrategia, type Job, type Template } from '@/api'
+import { PreviaTemplate, Templates } from '@/templates'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -31,6 +32,7 @@ const tempo = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60))
 export default function App() {
   const [jobs, setJobs] = useState<Job[] | null>(null)
   const [estrategias, setEstrategias] = useState<Estrategia[]>([])
+  const [templates, setTemplates] = useState<Template[]>([])
   const [agentes, setAgentes] = useState<string[]>([])
   const [aba, setAba] = useState('cortar')
   const [aberto, setAberto] = useState<Corte | null>(null)
@@ -39,6 +41,7 @@ export default function App() {
   useEffect(() => {
     atualizar()
     api.estrategias().then(setEstrategias).catch(() => {})
+    api.templates().then(setTemplates).catch(() => {})
     api.agentes().then(setAgentes).catch(() => {})
     const t = setInterval(atualizar, 3000)
     return () => clearInterval(t)
@@ -76,16 +79,21 @@ export default function App() {
             <TabsList>
               <TabsTrigger value="cortar">Cortar</TabsTrigger>
               <TabsTrigger value="cortes">Cortes {cortes.length > 0 && <Badge variant="secondary" className="ml-1">{cortes.length}</Badge>}</TabsTrigger>
+              <TabsTrigger value="templates">Templates</TabsTrigger>
               <TabsTrigger value="estrategias">Estratégias</TabsTrigger>
             </TabsList>
 
             <TabsContent value="cortar" className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-              <NovoCorte estrategias={estrategias} onCriado={() => { atualizar(); }} />
+              <NovoCorte estrategias={estrategias} templates={templates} onCriado={() => { atualizar(); }} />
               <ListaJobs jobs={jobs} onAtualizar={atualizar} onAbrir={setAberto} />
             </TabsContent>
 
             <TabsContent value="cortes" className="mt-6">
               <GradeCortes cortes={cortes} carregando={jobs === null} onAbrir={setAberto} />
+            </TabsContent>
+
+            <TabsContent value="templates" className="mt-6">
+              <Templates templates={templates} onSalvo={(t) => setTemplates((l) => [...l.filter((x) => x.nome !== t.nome), t].sort((a, b) => a.nome.localeCompare(b.nome)))} />
             </TabsContent>
 
             <TabsContent value="estrategias" className="mt-6">
@@ -94,18 +102,19 @@ export default function App() {
           </Tabs>
         </main>
 
-        <DialogCorte corte={aberto} onFechar={() => setAberto(null)} />
+        <DialogCorte corte={aberto} templates={templates} onFechar={() => setAberto(null)} onAplicado={() => { setAberto(null); atualizar() }} />
         <Toaster richColors />
       </div>
     </UiContentProvider>
   )
 }
 
-function NovoCorte({ estrategias, onCriado }: { estrategias: Estrategia[]; onCriado: () => void }) {
+function NovoCorte({ estrategias, templates, onCriado }: { estrategias: Estrategia[]; templates: Template[]; onCriado: () => void }) {
   const [modo, setModo] = useState<'video' | 'live'>('video')
   const [url, setUrl] = useState('')
   const [arquivos, setArquivos] = useState<File[]>([])
   const [estrategia, setEstrategia] = useState('__nenhuma')
+  const [template, setTemplate] = useState('classico')
   const [textoLivre, setTextoLivre] = useState('')
   const [notaMin, setNotaMin] = useState(6)
   const [limite, setLimite] = useState(10)
@@ -135,6 +144,7 @@ function NovoCorte({ estrategias, onCriado }: { estrategias: Estrategia[]; onCri
         entrada,
         monitorar: modo === 'live',
         estrategia: estrategia === '__livre' ? textoLivre : estrategia === '__nenhuma' ? '' : estrategia,
+        template: templates.some((t) => t.nome === template) ? template : '',
         nota_min: notaMin,
         limite,
         dur_min: durMin,
@@ -205,6 +215,25 @@ function NovoCorte({ estrategias, onCriado }: { estrategias: Estrategia[]; onCri
               <Textarea placeholder="Ex.: priorize humor e reações do chat; títulos curtos em caixa alta" value={textoLivre} onChange={(e) => setTextoLivre(e.target.value)} />
             )}
           </div>
+
+          {templates.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <Label>Template de edição</Label>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {templates.map((t) => (
+                  <button
+                    key={t.nome}
+                    type="button"
+                    onClick={() => setTemplate(t.nome)}
+                    className={`flex shrink-0 flex-col items-center gap-1 rounded-lg border-2 p-1.5 text-xs transition-colors ${template === t.nome ? 'border-primary' : 'border-transparent hover:border-border'}`}
+                  >
+                    <PreviaTemplate t={t} largura={64} />
+                    <span className={template === t.nome ? 'font-medium text-foreground' : 'text-muted-foreground'}>{t.nome}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Campo label="Nota mínima" valor={notaMin} set={setNotaMin} min={0} max={10} step={0.5} />
@@ -312,6 +341,11 @@ function ListaJobs({ jobs, onAtualizar, onAbrir }: { jobs: Job[] | null; onAtual
                   {j.status === 'rodando' && <span className="size-1.5 animate-pulse rounded-full bg-current" />}
                   {STATUS[j.status].texto}
                 </span>
+                {j.reaplicando && (
+                  <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary">
+                    <span className="size-1.5 animate-pulse rounded-full bg-current" /> aplicando template
+                  </span>
+                )}
               </div>
               {j.cortes.length > 0 && (
                 <div className="flex gap-2 overflow-x-auto pb-1">
@@ -367,7 +401,27 @@ function GradeCortes({ cortes, carregando, onAbrir }: { cortes: Corte[]; carrega
   )
 }
 
-function DialogCorte({ corte, onFechar }: { corte: Corte | null; onFechar: () => void }) {
+function DialogCorte({ corte, templates, onFechar, onAplicado }: {
+  corte: Corte | null
+  templates: Template[]
+  onFechar: () => void
+  onAplicado: () => void
+}) {
+  const [novo, setNovo] = useState('')
+  const [aplicando, setAplicando] = useState(false)
+  async function aplicar(todos: boolean) {
+    if (!corte || !novo) return
+    setAplicando(true)
+    try {
+      await api.aplicarTemplate(jobDoCorte(corte), novo, todos ? undefined : [corte.json])
+      toast.success(`Aplicando "${novo}"`, { description: todos ? 'Todos os cortes deste vídeo serão renderizados de novo.' : 'O corte é renderizado de novo em alguns segundos.' })
+      onAplicado()
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setAplicando(false)
+    }
+  }
   const legenda = corte ? `${corte.descricao}\n\n${corte.hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`)).join(' ')}` : ''
   return (
     <Dialog open={corte !== null} onOpenChange={(o) => !o && onFechar()}>
@@ -398,6 +452,23 @@ function DialogCorte({ corte, onFechar }: { corte: Corte | null; onFechar: () =>
                 <Button render={<a href={corte.video_url} download />}>
                   <Download className="size-4" /> Baixar MP4
                 </Button>
+              </div>
+              <div className="flex flex-col gap-2 rounded-lg border p-3">
+                <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Palette className="size-3.5" /> Template {corte.template ? <Badge variant="secondary">{corte.template}</Badge> : null}
+                </Label>
+                {corte.reaplicavel ? (
+                  <div className="flex flex-wrap gap-2">
+                    <Select items={templates.map((t) => ({ value: t.nome, label: t.nome }))} value={novo} onValueChange={(v) => setNovo(String(v))}>
+                      <SelectTrigger className="min-w-36 flex-1"><SelectValue placeholder="Trocar para…" /></SelectTrigger>
+                      <SelectContent>{templates.map((t) => <SelectItem key={t.nome} value={t.nome}>{t.nome}</SelectItem>)}</SelectContent>
+                    </Select>
+                    <Button variant="outline" disabled={!novo || aplicando} onClick={() => aplicar(false)}>Aplicar</Button>
+                    <Button variant="ghost" disabled={!novo || aplicando} onClick={() => aplicar(true)}>Em todos do vídeo</Button>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Corte gerado antes dos templates: gere de novo para poder trocar o template.</p>
+                )}
               </div>
             </div>
           </div>

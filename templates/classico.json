@@ -1,0 +1,42 @@
+{
+  "nome": "classico",
+  "descricao": "Legenda branca com contorno, 3 palavras por vez. O visual padrão do re-cut.",
+  "proporcao": "9:16",
+  "enquadramento": "rosto",
+  "velocidade": 1.0,
+  "legenda": {
+    "ativa": true,
+    "palavras_por_grupo": 3,
+    "pausa_max": 0.5,
+    "respeitar_pontuacao": true,
+    "fonte": "Arial",
+    "tamanho": 84,
+    "negrito": true,
+    "italico": false,
+    "maiusculas": true,
+    "cor": "#FFFFFF",
+    "contorno_cor": "#000000",
+    "contorno": 6,
+    "sombra": 2,
+    "fundo": false,
+    "fundo_cor": "#000000",
+    "fundo_opacidade": 70,
+    "destaque": false,
+    "destaque_cor": "#FFD700",
+    "posicao_y": 73,
+    "animacao": "nenhuma"
+  },
+  "titulo": {
+    "ativo": false,
+    "segundos": 3,
+    "tamanho": 60,
+    "cor": "#000000",
+    "fundo_cor": "#FFFFFF",
+    "posicao_y": 14
+  },
+  "logo": {
+    "arquivo": "",
+    "largura": 18,
+    "posicao": "topo-direita"
+  }
+}
