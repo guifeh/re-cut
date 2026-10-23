@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 import recut
+from lixeira import Lixeira
 
 RAIZ = Path(__file__).parent
 JOBS = RAIZ / "jobs"
@@ -24,6 +25,8 @@ UPLOADS = RAIZ / "uploads"
 DIST = RAIZ / "frontend" / "dist"
 PORTA = int(os.getenv("PORT", "8000"))
 MAX_UPLOAD = 20 * 1024 ** 3  # 20 GB
+LIXEIRA = RAIZ / "lixeira"
+lixeira = Lixeira(LIXEIRA, JOBS, UPLOADS)
 
 processos = {}  # id (ou id + REAPLICANDO) -> Popen; só os desta execução do servidor
 REAPLICANDO = ":reaplicar"  # chave à parte: reaplicar template não espera nem mexe no status do job (ex.: live rodando)
@@ -161,6 +164,55 @@ def salvar_template(dados):
     return tpl
 
 
+def ocupado(jid):
+    with lock:
+        return jid in processos or jid + REAPLICANDO in processos
+
+
+def excluir_video(job_dir):
+    if ocupado(job_dir.name):
+        raise ValueError("o vídeo ainda está sendo processado; pare o job antes de excluir")
+    return lixeira.excluir_video(job_dir)
+
+
+def excluir_corte(job_dir, dados):
+    rel = dados.get("json")
+    f = (job_dir / str(rel or "")).resolve()
+    if not isinstance(rel, str) or not f.is_relative_to(job_dir.resolve()) or not f.is_file() \
+            or not re.search(r"_corte\d+\.json$", f.name):
+        raise ValueError(f"corte inválido: {rel}")
+    with lock:  # a live pode seguir gerando cortes; só não dá para excluir no meio de uma reaplicação de template
+        if job_dir.name + REAPLICANDO in processos:
+            raise ValueError("há uma reaplicação de template rodando nesse vídeo; espere terminar")
+    item = lixeira.excluir_corte(f)
+    recut.atualizar_indices(f.parent)
+    return item
+
+
+def restaurar(item_id):
+    item = lixeira.restaurar(item_id)
+    if item["tipo"] == "corte":
+        recut.atualizar_indices(Path(item["destino"]))
+    return item
+
+
+def item_publico(item):
+    """Item da lixeira para a API: com a URL da miniatura, sem caminhos locais."""
+    publico = {k: v for k, v in item.items() if k not in ("upload", "destino")}
+    publico["thumb_url"] = f"/files/lixeira/{item['id']}/{item['thumb']}" if item.get("thumb") else None
+    if not publico["entrada"].startswith("http"):
+        publico["entrada"] = Path(publico["entrada"]).name
+    return publico
+
+
+def expirar_periodicamente():
+    """A lixeira se limpa sozinha: na abertura do servidor e depois de hora em hora."""
+    while True:
+        for item_id in lixeira.expirar():
+            print(f"lixeira: {item_id} passou do prazo e foi apagado de vez", file=sys.stderr)
+        time.sleep(3600)
+
+
 def parar_job(jid):
     with lock:
         p = processos.get(jid)
@@ -222,6 +274,11 @@ class Handler(SimpleHTTPRequestHandler):
                                   "tipos_momento": list(recut.TIPOS_MOMENTO), "efeitos": list(recut.EFEITOS)})
             if url.path == "/api/efeitos/sons":
                 return self.json(recut.listar_sons())
+            if url.path == "/api/lixeira":
+                return self.json([item_publico(i) for i in lixeira.listar()])
+            if url.path == "/api/lixeira/registro":
+                return self.json([{**h, "entrada": h["entrada"] if h["entrada"].startswith("http")
+                                   else Path(h["entrada"]).name} for h in lixeira.historico()])
             if url.path == "/api/agentes":
                 return self.json([nome for nome, _ in recut.agentes_disponiveis(os.getenv("RECUT_AGENTE", ""))])
             if partes[0] == "files":
@@ -235,7 +292,8 @@ class Handler(SimpleHTTPRequestHandler):
     def arquivo(self, caminho):
         """Serve cortes com suporte a Range (o <video> do navegador precisa para avançar)."""
         caminho = caminho.resolve()
-        if not caminho.is_relative_to(JOBS.resolve()) or not caminho.is_file():
+        permitido = caminho.is_relative_to(JOBS.resolve()) or caminho.is_relative_to(LIXEIRA.resolve())
+        if not permitido or not caminho.is_file():
             raise FileNotFoundError(caminho)
         tamanho = caminho.stat().st_size
         ini, fim = 0, tamanho - 1
@@ -267,6 +325,14 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.json(aplicar_template(self.job_dir(partes[2]), self.corpo_json()))
             if url.path == "/api/templates":
                 return self.json(salvar_template(self.corpo_json()), 201)
+            if partes[:2] == ["api", "jobs"] and len(partes) == 4 and partes[3] == "excluir":
+                return self.json(item_publico(excluir_video(self.job_dir(partes[2]))))
+            if partes[:2] == ["api", "jobs"] and partes[3:] == ["cortes", "excluir"] and len(partes) == 5:
+                return self.json(item_publico(excluir_corte(self.job_dir(partes[2]), self.corpo_json())))
+            if partes[:2] == ["api", "lixeira"] and len(partes) == 4 and partes[3] == "restaurar":
+                return self.json(item_publico(restaurar(partes[2])))
+            if partes[:2] == ["api", "lixeira"] and len(partes) == 4 and partes[3] == "apagar":
+                return self.json(item_publico(lixeira.apagar(partes[2])))
             if partes[:2] == ["api", "jobs"] and len(partes) == 4 and partes[3] == "parar":
                 self.job_dir(partes[2])
                 return self.json(parar_job(partes[2]))
@@ -303,5 +369,6 @@ class Handler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     JOBS.mkdir(exist_ok=True)
+    threading.Thread(target=expirar_periodicamente, daemon=True).start()
     print(f"re-cut em http://localhost:{PORTA}")
     ThreadingHTTPServer(("127.0.0.1", PORTA), Handler).serve_forever()
