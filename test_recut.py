@@ -183,3 +183,14 @@ def test_atualizar_indices_reconstroi_do_disco(tmp_path):
         ("lote_0001_corte01.mp4", "classico"), ("lote_0000_corte01.mp4", "caixa")]
     assert all("fonte" not in c and "palavras" not in c for c in dados["cortes"])
     assert not list(tmp_path.glob(".*.tmp"))  # gravação atômica não deixa lixo
+
+
+def test_atualizar_indices_nao_derruba_a_live(tmp_path, capsys):
+    import json
+    from recut import atualizar_indices
+    (tmp_path / "lote_0000_corte01.json").write_text('{"arquivo": "a.mp4", "no')  # gravação pela metade
+    atualizar_indices(tmp_path, {"titulo": "live"})  # não levanta: só avisa e o próximo lote refaz
+    assert "índice não atualizado" in capsys.readouterr().err
+    (tmp_path / "lote_0000_corte01.json").write_text(json.dumps({"arquivo": "a.mp4", "nota": 7}))
+    atualizar_indices(tmp_path, {"titulo": "live"})  # primeira gravação da live cria o índice com o cabeçalho
+    assert json.loads((tmp_path / "cortes.json").read_text())["cortes"] == [{"arquivo": "a.mp4", "nota": 7}]

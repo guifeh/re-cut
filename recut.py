@@ -544,7 +544,7 @@ def reaplicar(arquivos, tpl):
         renderizar(Path(c["fonte"]), c, [tuple(w) for w in c["palavras"]], arq.parent, arq.stem, tpl)
         c["template"] = tpl["nome"]
         c["duracao"] = round((c["fim"] - c["inicio"]) / tpl["velocidade"], 1)
-        arq.write_text(json.dumps(c, ensure_ascii=False, indent=2), encoding="utf-8")
+        gravar_json(arq, c)
         atualizar_indices(arq.parent)
 
 
@@ -564,20 +564,30 @@ def gravar_json(arquivo, dados):
     """Grava num temporário e troca de uma vez: quem lê nunca pega o arquivo pela metade."""
     tmp = arquivo.with_name(f".{arquivo.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+    for espera in (0.05, 0.1, 0.2, 0.4):  # Windows: o replace falha se outro processo está lendo o destino
+        try:
+            return os.replace(tmp, arquivo)
+        except PermissionError:
+            time.sleep(espera)
     os.replace(tmp, arquivo)
 
 
-def atualizar_indices(pasta):
+def atualizar_indices(pasta, cabecalho_live=None):
     """Refaz os índices da pasta (cortes.json da live, <fonte>_cortes.json do vídeo) a partir do disco.
     A live e a reaplicação podem escrever ao mesmo tempo; como os dois reconstroem do disco em vez de
-    editar a lista, nenhum apaga o corte que o outro acabou de gravar."""
+    editar a lista, nenhum apaga o corte que o outro acabou de gravar. É melhor esforço: o índice é
+    derivado dos .json dos cortes, então uma falha aqui não pode derrubar a live."""
     # ponytail: sem lock entre processos; sobra uma janela de milissegundos em que um índice pode sair
     # sem o corte gravado no mesmo instante, e o próximo lote ou reaplicação conserta
-    live = pasta / "cortes.json"
-    if live.is_file():
-        gravar_json(live, {**json.loads(live.read_text(encoding="utf-8")), "cortes": cortes_da_pasta(pasta)})
-    for idx in pasta.glob("*_cortes.json"):
-        gravar_json(idx, cortes_da_pasta(pasta, idx.name.removesuffix("_cortes.json")))
+    try:
+        live = pasta / "cortes.json"
+        if cabecalho_live is not None or live.is_file():
+            cabecalho = cabecalho_live if cabecalho_live is not None else json.loads(live.read_text(encoding="utf-8"))
+            gravar_json(live, {**cabecalho, "cortes": cortes_da_pasta(pasta)})
+        for idx in pasta.glob("*_cortes.json"):
+            gravar_json(idx, cortes_da_pasta(pasta, idx.name.removesuffix("_cortes.json")))
+    except (OSError, ValueError) as e:  # ValueError inclui JSONDecodeError
+        print(f"  índice não atualizado agora ({e}); o próximo lote ou reaplicação refaz", file=sys.stderr)
 
 
 def processar(video, saida, prefixo, cfg):
@@ -602,7 +612,7 @@ def processar(video, saida, prefixo, cfg):
              # fonte + palavras permitem reaplicar outro template depois sem transcrever de novo
              "fonte": str(Path(video).resolve()),
              "palavras": palavras_do_corte(palavras, c["inicio"], c["fim"])}
-        (saida / f"{nome}.json").write_text(json.dumps(c, ensure_ascii=False, indent=2), encoding="utf-8")
+        gravar_json(saida / f"{nome}.json", c)
         feitos.append(publico(c))
     return feitos
 
@@ -630,7 +640,7 @@ def clipar_live(canal, info, saida, cfg):
                 todos += novos
                 feitos += 1
                 # índice lido do disco, não da memória: preserva templates reaplicados durante a live
-                gravar_json(pasta / "cortes.json", {**stream, "cortes": cortes_da_pasta(pasta)})
+                atualizar_indices(pasta, stream)
                 evento(cfg, "live_clips", {**stream, "lote": lote.stem, "cortes": novos})
             if caiu:
                 break
@@ -694,9 +704,9 @@ def main():
         monitorar(a.entrada, a.saida, cfg)
     else:
         fonte = Path(a.entrada) if Path(a.entrada).exists() else baixar(a.entrada, a.saida)
-        cortes = processar(fonte, a.saida, fonte.stem, cfg)
-        (a.saida / f"{fonte.stem}_cortes.json").write_text(json.dumps(cortes, ensure_ascii=False, indent=2),
-                                                           encoding="utf-8")
+        processar(fonte, a.saida, fonte.stem, cfg)
+        # do disco, não da memória: uma reaplicação feita enquanto os outros cortes renderizavam vale
+        gravar_json(a.saida / f"{fonte.stem}_cortes.json", cortes_da_pasta(a.saida, fonte.stem))
 
 
 if __name__ == "__main__":
