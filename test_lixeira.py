@@ -171,7 +171,11 @@ def test_item_fantasma_some_da_lista(ambiente, monkeypatch):
     monkeypatch.setattr(lixeira, "IDADE_FANTASMA", dt.timedelta(0))  # na vida real só depois de 1 min
     # o processo "cai" logo depois de gravar item.json: nada é movido
     os_replace_original = lixeira.os.replace
-    monkeypatch.setattr(lixeira.os, "replace", lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    def cai_ao_mover(origem, destino):  # item.json (gravado via .tmp) passa; mover o vídeo/corte "derruba" o processo
+        if str(origem).endswith(".tmp"):
+            return os_replace_original(origem, destino)
+        raise KeyboardInterrupt()
+    monkeypatch.setattr(lixeira.os, "replace", cai_ao_mover)
     for excluir in (lambda: lx.excluir_video(job), lambda: lx.excluir_corte(job / "fonte_corte01.json")):
         with pytest.raises(KeyboardInterrupt):
             excluir()

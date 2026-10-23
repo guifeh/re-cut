@@ -70,8 +70,7 @@ class Lixeira:
         return item
 
     def _salvar_item(self, item):
-        (self.pasta / item["id"] / "item.json").write_text(json.dumps(item, ensure_ascii=False, indent=2),
-                                                         encoding="utf-8")
+        _gravar_item_json(self.pasta / item["id"] / "item.json", item)
 
     def excluir_video(self, job_dir):
         """Move o job inteiro (cortes, log, vídeo baixado) e o arquivo enviado, se houver, para a lixeira."""
@@ -221,8 +220,7 @@ class Lixeira:
                 raise ValueError(f"não deu para restaurar agora ({e.strerror or e}); feche o player e tente de novo")
             if dono_do_upload and dono_do_upload.parent != pasta:  # o outro vídeo continua na lixeira, sem o arquivo
                 outro = json.loads(dono_do_upload.read_text(encoding="utf-8"))
-                dono_do_upload.write_text(json.dumps({**outro, "upload": None}, ensure_ascii=False, indent=2),
-                                          encoding="utf-8")
+                _gravar_item_json(dono_do_upload, {**outro, "upload": None})
             self._registrar("restaurado", item)
             self._tirar_da_lista(pasta)
             return {**item, "restaurado_em": agora().isoformat(), "destino": str(destino)}
@@ -291,7 +289,7 @@ class Lixeira:
         if destino != Path(upload):
             item_json = destino.parent.parent / "item.json"
             outro = json.loads(item_json.read_text(encoding="utf-8"))
-            item_json.write_text(json.dumps({**outro, "upload": upload}, ensure_ascii=False, indent=2), encoding="utf-8")
+            _gravar_item_json(item_json, {**outro, "upload": upload})
 
     def expirar(self, momento=None):
         """Apaga de vez o que passou do prazo da lixeira; devolve os ids apagados."""
@@ -314,7 +312,8 @@ class Lixeira:
         """Tira da lista a pasta de um item que já não guarda nada (só item.json e pastas vazias).
         Regra de segurança: se sobrou QUALQUER arquivo, não mexe e devolve False. Só apagar() e a expiração
         apagam conteúdo da lixeira; todo o resto passa por aqui."""
-        if any(f.is_file() and f.name != "item.json" for f in pasta.rglob("*")):
+        metadado = lambda f: f.name == "item.json" or (f.name.startswith(".item.") and f.suffix == ".tmp")  # noqa: E731
+        if any(f.is_file() and not metadado(f) for f in pasta.rglob("*")):
             return False
         fora = pasta.with_name(APAGANDO + pasta.name)
         try:
@@ -324,6 +323,13 @@ class Lixeira:
             (pasta / "item.json").unlink(missing_ok=True)
         shutil.rmtree(fora, ignore_errors=True)
         return True
+
+
+def _gravar_item_json(arquivo, item):
+    """Grava num temporário e troca de uma vez: uma queda no meio nunca deixa um item.json corrompido."""
+    tmp = arquivo.with_name(f".item.{uuid.uuid4().hex}.tmp")
+    tmp.write_text(json.dumps(item, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, arquivo)
 
 
 def _mover_todos(movimentos):
