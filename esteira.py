@@ -27,22 +27,22 @@ def _no(estado="ocioso", progresso=None, itens=(), msg=""):
     return {"estado": estado, "progresso": progresso, "itens": list(itens), "msg": msg}
 
 
-def _etapa(evs_etapa, aberto, vivo):
-    """aberto: {item: progresso} dos itens com inicio sem fim/erro."""
+def _etapa(evs_etapa, aberto, term, vivo):
+    """aberto: {item: progresso} dos itens com inicio sem fim/erro (último atualizado por último);
+    term: {item: (estado, msg)} do último fim/erro de cada item."""
     msg = next((e["msg"] for e in reversed(evs_etapa) if e.get("msg")), "")
     if aberto:
         if not vivo:
             return "erro", None, "interrompido"
         return "rodando", list(aberto.values())[-1], msg
-    if not evs_etapa:
-        return "ocioso", None, ""
-    if evs_etapa[-1].get("estado") == "erro":
-        return "erro", None, msg
-    return ("ok" if any(e.get("estado") == "fim" for e in evs_etapa) else "ocioso"), None, msg
+    erros = [m for est, m in term.values() if est == "erro"]
+    if erros:
+        return "erro", None, erros[-1] or msg
+    return ("ok" if term else "ocioso"), None, msg
 
 
 def _plataforma(p, aprovados):
-    posts = [(c["nome"], c["publicacao"].get("plataformas", {}).get(p)) for c in aprovados]
+    posts = [(c["nome"], (c.get("publicacao") or {}).get("plataformas", {}).get(p)) for c in aprovados]
     posts = [(n, x) for n, x in posts if x]
     sts = [x.get("estado") for _, x in posts]
     if "enviando" in sts:
@@ -62,6 +62,7 @@ def estado(evs: list[dict], vivo: bool, cortes: list[dict]) -> dict:
     por_etapa = {e: [] for e in ETAPAS}
     aberto = {e: {} for e in ETAPAS}   # etapa -> {item: último progresso}
     fins = {e: set() for e in ETAPAS}  # etapa -> itens com fim
+    term = {e: {} for e in ETAPAS}     # etapa -> {item: (estado, msg)} do último fim/erro
     atual = {}                         # item -> etapa do evento mais recente
     for ev in evs:
         etapa, est, item = ev.get("etapa"), ev.get("estado"), ev.get("item", "")
@@ -71,22 +72,27 @@ def estado(evs: list[dict], vivo: bool, cortes: list[dict]) -> dict:
         atual.pop(item, None)  # reinsere: ordem = chegada na etapa
         atual[item] = etapa
         if est == "inicio":
+            aberto[etapa].pop(item, None)
             aberto[etapa][item] = None
         elif est == "progresso":
             if item in aberto[etapa] and "progresso" in ev:
+                aberto[etapa].pop(item)
                 aberto[etapa][item] = ev["progresso"]
         elif est in ("fim", "erro"):
             aberto[etapa].pop(item, None)
+            term[etapa].pop(item, None)
+            term[etapa][item] = (est, ev.get("msg", ""))
             if est == "fim":
                 fins[etapa].add(item)
 
     nos = {}
     for etapa in ETAPAS:
-        est, prog, msg = _etapa(por_etapa[etapa], aberto[etapa], vivo)
+        est, prog, msg = _etapa(por_etapa[etapa], aberto[etapa], term[etapa], vivo)
         nos[etapa] = _no(est, prog, [i for i, e in atual.items() if e == etapa], msg)
 
-    pendentes = sorted((c for c in cortes if not c["publicacao"].get("aprovado_em")), key=lambda c: -c["nota"])
-    aprovados = [c for c in cortes if c["publicacao"].get("aprovado_em")]
+    pub = lambda c: c.get("publicacao") or {}
+    pendentes = sorted((c for c in cortes if not pub(c).get("aprovado_em")), key=lambda c: -(c.get("nota") or 0))
+    aprovados = [c for c in cortes if pub(c).get("aprovado_em")]
     nos["aprovacao"] = _no("esperando" if pendentes else ("ok" if aprovados else "ocioso"), None, [c["nome"] for c in pendentes])
     for p in PLATAFORMAS:
         nos[p] = _plataforma(p, aprovados)

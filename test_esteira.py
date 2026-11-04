@@ -63,3 +63,26 @@ def test_resumo_do_dia():
         {"nome": "c", "nota": 5, "criado_em": "2026-11-03T09:00:00", "publicacao": {}},
     ]
     assert resumo_do_dia(cortes, date(2026, 11, 4)) == {"cortes": 2, "aprovados": 1, "postados": 1, "erros": 1}
+
+
+def test_erro_de_um_item_nao_some_com_outro_ok():
+    evs = [ev("ia", "inicio", "a"), ev("ia", "erro", "a", msg="x"), ev("ia", "inicio", "b"), ev("ia", "fim", "b")]
+    no = estado(evs, vivo=True, cortes=[])["nos"]["ia"]
+    assert (no["estado"], no["msg"]) == ("erro", "x")
+
+
+def test_item_reaberto_e_concluido_limpa_erro():
+    evs = [ev("ia", "inicio", "a"), ev("ia", "erro", "a"), ev("ia", "inicio", "a"), ev("ia", "fim", "a")]
+    assert estado(evs, vivo=True, cortes=[])["nos"]["ia"]["estado"] == "ok"
+
+
+def test_progresso_vem_do_item_atualizado_por_ultimo():
+    evs = [ev("renderizar", "inicio", "a"), ev("renderizar", "inicio", "b"),
+           ev("renderizar", "progresso", "b", progresso=0.3), ev("renderizar", "progresso", "a", progresso=0.8)]
+    assert estado(evs, vivo=True, cortes=[])["nos"]["renderizar"]["progresso"] == 0.8
+
+
+def test_corte_malformado_nao_quebra():
+    cortes = [{"nome": "c", "nota": None}, {"nome": "d", "nota": 3, "publicacao": None}]
+    nos = estado([], vivo=False, cortes=cortes)["nos"]
+    assert nos["aprovacao"]["itens"] == ["d", "c"] and nos["youtube"]["estado"] == "ocioso"
