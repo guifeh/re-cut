@@ -516,15 +516,20 @@ def extrair_json(texto):
 ETAPAS = ("entrada", "baixar", "transcrever", "ia", "renderizar", "ranking")
 ESTADOS = ("inicio", "progresso", "fim", "erro")
 PREFIXO_EVENTO = "@@ "  # linhas do log que a interface lê para animar a esteira
-ETAPA_ATUAL = "entrada"
+ETAPA_ATUAL, ITEM_ATUAL = "entrada", ""
 
 
 def marcar(etapa, estado, item="", **dados):
     """Evento estruturado no log: `@@ {json}`; dados opcionais: progresso (0-1), msg, n, corte."""
-    global ETAPA_ATUAL
-    ETAPA_ATUAL = etapa
+    global ETAPA_ATUAL, ITEM_ATUAL
+    ETAPA_ATUAL, ITEM_ATUAL = etapa, item
     ev = {"etapa": etapa, "estado": estado, "item": item, "t": dt.datetime.now().isoformat(timespec="seconds"), **dados}
     print(PREFIXO_EVENTO + json.dumps(ev, ensure_ascii=False), flush=True)
+
+
+def marcar_erro(e):
+    """Fecha com `erro` o (etapa, item) que ficou aberto no último marcar."""
+    marcar(ETAPA_ATUAL, "erro", ITEM_ATUAL, msg=str(e))
 
 
 def limpar_legendas(c):
@@ -562,14 +567,14 @@ def baixar(url, saida):
             p = d["downloaded_bytes"] / total
             if p - ultimo[0] >= 0.05:  # no máximo a cada 5%
                 ultimo[0] = p
-                marcar("baixar", "progresso", progresso=round(p, 2), msg=f"Baixando {p:.0%}")
+                marcar("baixar", "progresso", "fonte", progresso=round(p, 2), msg=f"Baixando {p:.0%}")
 
     opts = {**YTDLP, "outtmpl": str(saida / "fonte.%(ext)s"), "format": "bv*[height<=1080]+ba/b",
             "merge_output_format": "mp4", "progress_hooks": [hook]}
-    marcar("baixar", "inicio", msg=f"Baixando {url}")
+    marcar("baixar", "inicio", "fonte", msg=f"Baixando {url}")
     with yt_dlp.YoutubeDL(opts) as ydl:
         arq = Path(ydl.extract_info(url)["requested_downloads"][0]["filepath"])
-    marcar("baixar", "fim", arq.stem, msg="Download concluído")
+    marcar("baixar", "fim", "fonte", msg="Download concluído")
     return arq
 
 
@@ -877,14 +882,14 @@ def processar(video, saida, prefixo, cfg):
                            cfg["dur_min"], cfg["dur_max"], cfg["limite"])
     marcar("ranking", "fim", prefixo, n=len(cortes), msg=f"{len(cortes)} cortes aprovados pela regra")
     feitos = []
+    if cortes:
+        marcar("renderizar", "inicio", prefixo, n=len(cortes), msg=f"Renderizando {len(cortes)} cortes")
     for i, c in enumerate(cortes, 1):
         nome = f"{prefixo}_corte{i:02d}"
         c["momentos"] = limpar_momentos(c.get("momentos"), c["inicio"], c["fim"])
         print(f"[{prefixo}] {nome} nota {c['nota']:.1f}: {c['titulo']}")
-        marcar("renderizar", "inicio", prefixo, corte=nome, progresso=round((i - 1) / len(cortes), 2),
-               msg=f"Renderizando {nome}")
         renderizar(video, c, palavras, saida, nome, cfg["template"])
-        marcar("renderizar", "fim", prefixo, corte=nome, progresso=round(i / len(cortes), 2), msg=f"{nome} pronto")
+        marcar("renderizar", "progresso", prefixo, corte=nome, progresso=round(i / len(cortes), 2), msg=f"{nome} pronto")
         c = {**c, "legendas": limpar_legendas(c), "arquivo": f"{nome}.mp4", "thumbnail": f"{nome}.jpg", "lote": prefixo, "template": cfg["template"]["nome"],
              "duracao": round((c["fim"] - c["inicio"]) / cfg["template"]["velocidade"], 1),
              "criado_em": dt.datetime.now().isoformat(timespec="seconds"),
@@ -893,6 +898,8 @@ def processar(video, saida, prefixo, cfg):
              "palavras": palavras_do_corte(palavras, c["inicio"], c["fim"])}
         gravar_json(saida / f"{nome}.json", c)
         feitos.append(publico(c))
+    if cortes:
+        marcar("renderizar", "fim", prefixo, n=len(cortes), msg=f"{len(cortes)} cortes renderizados")
     return feitos
 
 
@@ -990,7 +997,7 @@ def main():
             # do disco, não da memória: uma reaplicação feita enquanto os outros cortes renderizavam vale
             gravar_json(a.saida / f"{fonte.stem}_cortes.json", cortes_da_pasta(a.saida, fonte.stem))
     except Exception as e:
-        marcar(ETAPA_ATUAL, "erro", msg=str(e))
+        marcar_erro(e)
         raise
 
 
