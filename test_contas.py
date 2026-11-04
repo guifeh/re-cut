@@ -202,3 +202,11 @@ def test_requisitar_devolve_erro_e_envia_arquivo(tmp_path):
         assert recebido["corpo"] == b"x" * 100000
     finally:
         srv.shutdown()
+
+
+def test_desconectar_mantem_o_app(tmp_path):
+    from contas import desconectar
+    salvar("youtube", {"client_id": "c", "client_secret": "s", "access_token": "t", "refresh_token": "r",
+                       "vence_em": "2999-01-01T00:00:00", "nome": "canal"}, tmp_path)
+    assert desconectar("youtube", tmp_path)["conectada"] is False
+    assert ler("youtube", tmp_path) == {"client_id": "c", "client_secret": "s"}

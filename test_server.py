@@ -41,9 +41,11 @@ def servidor(tmp_path, monkeypatch):
         time.sleep(0.01)
 
 
-def pedir(porta, caminho, corpo=None):
+def pedir(porta, caminho, corpo=None, cabecalhos=None):
     dados = json.dumps(corpo).encode() if corpo is not None else None
-    req = urllib.request.Request(f"http://127.0.0.1:{porta}{caminho}", data=dados, method="POST" if dados else "GET")
+    cab = {"Content-Type": "application/json", **(cabecalhos or {})}
+    req = urllib.request.Request(f"http://127.0.0.1:{porta}{caminho}", data=dados, headers=cab,
+                                 method="POST" if dados else "GET")
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
             return r.status, json.loads(r.read())
@@ -239,3 +241,26 @@ def test_expirar_renova_instagram_sem_derrubar(monkeypatch, capsys):
         server.expirar_periodicamente()
     err = capsys.readouterr().err
     assert "RuntimeError" in err and "TOKEN-SECRETO" not in err
+
+
+def test_host_estranho_e_recusado(servidor, monkeypatch):
+    chamadas = envio_falso(monkeypatch)
+    rebind = {"Host": f"evil.example:{servidor}"}
+    assert pedir(servidor, f"/api/esteira/{JID}", cabecalhos=rebind) == (403, {"erro": "host não permitido"})
+    assert pedir(servidor, APROVAR, PEDIDO, rebind)[0] == 403
+    assert pedir(servidor, "/api/jobs", cabecalhos={"Host": f"localhost:{servidor}"})[0] == 200
+    assert not corte().with_suffix(".publicacao").exists() and not chamadas
+
+
+def test_post_sem_json_e_415(servidor, monkeypatch):
+    chamadas = envio_falso(monkeypatch)
+    status, r = pedir(servidor, APROVAR, PEDIDO, {"Content-Type": "text/plain"})
+    assert status == 415 and r["erro"]
+    assert pedir(servidor, f"/api/jobs/{JID}/parar", {}, {"Content-Type": "text/plain"})[0] == 415
+    assert not corte().with_suffix(".publicacao").exists() and not chamadas
+
+
+def test_get_com_dado_quebrado_e_500_com_erro(servidor):
+    (server.JOBS / JID / "fonte_corte01.json").write_text("{quebrado")
+    status, r = pedir(servidor, f"/api/esteira/{JID}")
+    assert status == 500 and r["erro"]

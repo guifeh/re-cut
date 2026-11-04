@@ -90,6 +90,14 @@ def configurar(plataforma, client_id, client_secret, pasta=PASTA):
         salvar(plataforma, {**d, "client_id": client_id, "client_secret": client_secret}, pasta)
 
 
+def desconectar(plataforma, pasta=PASTA):
+    """Tira a conexão e mantém o app (client id/secret) para conectar de novo sem redigitar."""
+    with _trava:  # sob a trava: uma renovação de token no meio de um envio não regrava os tokens apagados
+        d = ler(plataforma, pasta)
+        salvar(plataforma, {k: d[k] for k in ("client_id", "client_secret") if k in d}, pasta)
+    return publico(plataforma, pasta)
+
+
 def _redirect_youtube():
     return f"http://127.0.0.1:{os.getenv('PORT', '8000')}/api/contas/youtube/retorno"
 

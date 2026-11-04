@@ -278,13 +278,6 @@ def texto(dados, chave):
     return v
 
 
-def desconectar(plataforma):
-    """Tira a conexão e mantém o app (client id/secret) para conectar de novo sem redigitar."""
-    d = contas.ler(plataforma, contas.PASTA)
-    contas.salvar(plataforma, {k: d[k] for k in ("client_id", "client_secret") if k in d}, contas.PASTA)
-    return contas.publico(plataforma, contas.PASTA)
-
-
 def retorno_youtube(query):
     """Fim do login do Google: troca o código e devolve para onde redirecionar (aba Contas, com o erro se falhou)."""
     q = parse_qs(query)
@@ -370,7 +363,17 @@ class Handler(SimpleHTTPRequestHandler):
             raise FileNotFoundError(jid)
         return d
 
+    def host_permitido(self):
+        """Só aceita o próprio endereço: outro Host é DNS rebinding (um site de fora falando com a API local)."""
+        porta = self.server.server_address[1]
+        if self.headers.get("Host") in (f"127.0.0.1:{porta}", f"localhost:{porta}"):
+            return True
+        self.json({"erro": "host não permitido"}, 403)
+        return False
+
     def do_GET(self):
+        if not self.host_permitido():
+            return
         url = urlparse(self.path)
         partes = url.path.strip("/").split("/")
         try:
@@ -413,6 +416,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.arquivo(JOBS.parent / unquote("/".join(partes[1:])))
         except FileNotFoundError:
             return self.json({"erro": "não encontrado"}, 404)
+        except ValueError as e:  # JSON quebrado no disco e afins: resposta em vez de conexão caída (só o tipo)
+            return self.json({"erro": f"não deu para ler os dados ({type(e).__name__})"}, 500)
         if not (DIST / url.path.lstrip("/")).is_file():
             self.path = "/index.html"  # rotas do SPA
         return super().do_GET()
@@ -444,8 +449,13 @@ class Handler(SimpleHTTPRequestHandler):
                 restante -= len(bloco)
 
     def do_POST(self):
+        if not self.host_permitido():
+            return
         url = urlparse(self.path)
         partes = url.path.strip("/").split("/")
+        # JSON obriga o navegador a pedir licença (preflight) antes de um POST de outro site; o upload é corpo cru
+        if url.path != "/api/upload" and self.headers.get_content_type() != "application/json":
+            return self.json({"erro": "envie JSON (Content-Type: application/json)"}, 415)
         try:
             if url.path == "/api/jobs":
                 return self.json(criar_job(self.corpo_json()), 201)
@@ -472,7 +482,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if acao == "codigo" and p == "instagram":
                     return self.json(contas.concluir(p, texto(self.corpo_json(), "codigo"), None, pasta=contas.PASTA))
                 if acao == "desconectar":
-                    return self.json(desconectar(p))
+                    return self.json(contas.desconectar(p, contas.PASTA))
             if partes[:2] == ["api", "lixeira"] and len(partes) == 4 and partes[3] == "restaurar":
                 return self.json(item_publico(restaurar(partes[2])))
             if partes[:2] == ["api", "lixeira"] and len(partes) == 4 and partes[3] == "apagar":
