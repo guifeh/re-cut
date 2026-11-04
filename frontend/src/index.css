@@ -155,3 +155,27 @@
     from { opacity: 0; }
     to { opacity: 1; }
 }
+
+/* esteira: borda girando no nó rodando (medida do n8n). Sem @property o gradiente fica inválido e some;
+   o nó usa então um wrapper com animate-spin (ver NoEtapa em esteira.tsx) */
+@property --angulo {
+    syntax: '<angle>';
+    inherits: false;
+    initial-value: 0deg;
+}
+@keyframes girar-borda {
+    to { --angulo: 360deg; }
+}
+.no-esteira[data-estado='rodando']::after {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    z-index: -1;
+    border-radius: 19px;
+    background: conic-gradient(from var(--angulo), #ff6d5a 0 20%, #ff6d5a33 35% 65%, #ff6d5a 90%);
+    animation: girar-borda 1.5s linear infinite;
+}
+/* cartões de item: quando mudam de etapa o React Flow só troca o transform, e isto faz o deslize */
+.react-flow__node-cartao {
+    transition: transform 600ms ease;
+}

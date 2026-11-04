@@ -15,7 +15,36 @@ export type Corte = {
   template?: string
   momentos?: Momento[]
   reaplicavel: boolean
+  /** nome do arquivo sem extensão; é o item que a esteira mostra na aprovação e nas plataformas */
+  nome: string
+  /** 3 opções de legenda da IA (cortes antigos não têm) */
+  legendas?: string[]
+  publicacao?: Publicacao
 }
+
+export type Plataforma = 'youtube' | 'instagram' | 'tiktok'
+export type EstadoPlataforma = {
+  estado: 'enviando' | 'ok' | 'erro' | 'incerto' | 'manual'
+  link: string | null
+  erro: string | null
+  em: string
+}
+/** {} enquanto o corte não foi aprovado */
+export type Publicacao = {
+  aprovado_em?: string
+  legenda?: string
+  hashtags?: string[]
+  plataformas?: Partial<Record<Plataforma, EstadoPlataforma>>
+}
+
+export type IdNo = 'entrada' | 'baixar' | 'transcrever' | 'ia' | 'renderizar' | 'ranking' | 'aprovacao' | Plataforma
+export type EstadoNo = 'ocioso' | 'rodando' | 'ok' | 'erro' | 'esperando'
+/** progresso de 0 a 1; itens = vídeos/lotes (etapas) ou nomes de cortes (aprovação e plataformas) */
+export type NoEsteira = { estado: EstadoNo; progresso: number | null; itens: string[]; msg: string }
+export type ItemFeed = { t: string; etapa: string; msg: string; estado: string }
+/** arestas: "origem-destino" -> quantos itens passaram */
+export type Esteira = { nos: Record<IdNo, NoEsteira>; arestas: Record<string, number>; feed: ItemFeed[] }
+export type ResumoDoDia = { cortes: number; aprovados: number; postados: number; erros: number }
 
 export type Job = {
   id: string
@@ -154,12 +183,17 @@ export const api = {
   registroLixeira: () => req<EventoLixeira[]>('/api/lixeira/registro'),
   restaurar: (id: string) => post<ItemLixeira>(`/api/lixeira/${id}/restaurar`, {}),
   apagarDeVez: (id: string) => post<ItemLixeira>(`/api/lixeira/${id}/apagar`, {}),
+  esteira: (jobId: string) => req<{ job: Job; esteira: Esteira }>(`/api/esteira/${jobId}`),
+  resumoDoDia: () => req<ResumoDoDia>('/api/esteira/resumo'),
+  publicacao: (jobId: string, json: string, plataforma: Plataforma, acao: 'tentar' | 'forcar' | 'link', link?: string) =>
+    post<Publicacao>(`/api/jobs/${jobId}/cortes/publicacao`, { json, plataforma, acao, link }),
   salvarTemplate: (t: Template) => post<Template>('/api/templates', t),
   aplicarTemplate: (jobId: string, template: string, cortes?: string[]) =>
     post<Job>(`/api/jobs/${jobId}/aplicar_template`, { template, cortes }),
 }
 
 /** id do job a partir da URL do corte (/files/jobs/<id>/...) */
+export const nomeEntrada = (e: string) => (e.startsWith('http') ? e.replace(/^https?:\/\/(www\.)?/, '') : e.split(/[\\/]/).pop()!.replace(/^[0-9a-f]{8}-/, ''))
 export const jobDoCorte = (c: Corte) => c.video_url.split('/')[3]
 
 /** XHR em vez de fetch para ter progresso do upload (vídeos de live são grandes). */

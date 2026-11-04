@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Clapperboard, Copy, Download, Film, Palette, Radio, Scissors, Sparkles, Square, Trash2, Upload } from 'lucide-react'
-import { api, jobDoCorte, parseHoras, upload, type Corte, type Estrategia, type Job, type Template } from '@/api'
+import { Clapperboard, Copy, Download, Film, Palette, Radio, Scissors, Sparkles, Square, Trash2, Upload, Workflow } from 'lucide-react'
+import { api, jobDoCorte, nomeEntrada, parseHoras, upload, type Corte, type Estrategia, type Job, type Template } from '@/api'
+import { Esteira } from '@/esteira'
 import { Confirmar, Lixeira, porDias, usePrazoLixeira } from '@/lixeira'
 import { PreviaTemplate, TIPO_MOMENTO, Templates } from '@/templates'
 import { Badge } from '@/components/ui/badge'
@@ -27,7 +28,6 @@ const STATUS: Record<Job['status'], { texto: string; classe: string }> = {
   interrompido: { texto: 'interrompido', classe: 'bg-muted text-muted-foreground' },
 }
 
-const nomeEntrada = (e: string) => (e.startsWith('http') ? e.replace(/^https?:\/\/(www\.)?/, '') : e.split(/[\\/]/).pop()!.replace(/^[0-9a-f]{8}-/, ''))
 const tempo = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`
 
 export default function App() {
@@ -35,7 +35,7 @@ export default function App() {
   const [estrategias, setEstrategias] = useState<Estrategia[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
   const [agentes, setAgentes] = useState<string[]>([])
-  const [aba, setAba] = useState('cortar')
+  const [aba, setAba] = useState(() => new URLSearchParams(location.search).get('aba') ?? 'esteira')
   const [aberto, setAberto] = useState<Corte | null>(null)
 
   const atualizar = useCallback(() => api.jobs().then(setJobs).catch(() => setJobs((j) => j ?? [])), [])
@@ -78,12 +78,17 @@ export default function App() {
         <main className="mx-auto max-w-6xl px-4 py-6">
           <Tabs value={aba} onValueChange={(v) => setAba(String(v))}>
             <TabsList>
+              <TabsTrigger value="esteira"><Workflow className="size-3.5" /> Esteira</TabsTrigger>
               <TabsTrigger value="cortar">Cortar</TabsTrigger>
               <TabsTrigger value="cortes">Cortes {cortes.length > 0 && <Badge variant="secondary" className="ml-1">{cortes.length}</Badge>}</TabsTrigger>
               <TabsTrigger value="templates">Templates</TabsTrigger>
               <TabsTrigger value="estrategias">Estratégias</TabsTrigger>
               <TabsTrigger value="lixeira"><Trash2 className="size-3.5" /> Lixeira</TabsTrigger>
             </TabsList>
+
+            <TabsContent value="esteira" className="mt-6">
+              <Esteira jobs={jobs} />
+            </TabsContent>
 
             <TabsContent value="cortar" className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
               <NovoCorte estrategias={estrategias} templates={templates} onCriado={() => { atualizar(); }} />
