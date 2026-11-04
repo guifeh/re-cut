@@ -34,3 +34,6 @@ efeitos/
 
 # lixeira (safe-delete): vídeos e cortes excluídos e o registro de ações
 lixeira/
+
+# contas (YouTube/Instagram): client secrets e tokens
+contas/
