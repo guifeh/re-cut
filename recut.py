@@ -54,6 +54,8 @@ uma reação, uma explicação curta. Mudança de tom e pausa antes de uma frase
 Cada corte deve durar entre {dur_min} e {dur_max} segundos, começar no início de uma frase e terminar depois do payoff.
 Dê a cada corte uma nota viral de 0 a 10 com o motivo explicado; seja exigente, nota 8+ é rara.
 Escreva um título curto que prenda e a descrição do post a partir do que é falado no corte.
+Escreva 3 opções de legenda para o post (estilos diferentes: curiosidade, humor, direta), cada uma com até 150
+caracteres, sem hashtags; as hashtags vão no campo próprio.
 Use exatamente os tempos (em segundos) das linhas da transcrição.
 
 Em cada corte, marque também os momentos que pedem um efeito de edição:
@@ -80,6 +82,7 @@ ESQUEMA = {
                     "nota": {"type": "number"},
                     "motivo": {"type": "string"},
                     "hashtags": {"type": "array", "items": {"type": "string"}},
+                    "legendas": {"type": "array", "items": {"type": "string"}},  # 3 opções; limpar_legendas garante
                     "momentos": {
                         "type": "array",
                         "items": {
@@ -95,7 +98,7 @@ ESQUEMA = {
                         },
                     },
                 },
-                "required": ["inicio", "fim", "titulo", "descricao", "nota", "motivo", "hashtags", "momentos"],
+                "required": ["inicio", "fim", "titulo", "descricao", "nota", "motivo", "hashtags", "legendas", "momentos"],
                 "additionalProperties": False,
             },
         }
@@ -510,6 +513,29 @@ def extrair_json(texto):
     return json.JSONDecoder().raw_decode(texto[texto.index("{"):])[0]
 
 
+ETAPAS = ("entrada", "baixar", "transcrever", "ia", "renderizar", "ranking")
+ESTADOS = ("inicio", "progresso", "fim", "erro")
+PREFIXO_EVENTO = "@@ "  # linhas do log que a interface lê para animar a esteira
+ETAPA_ATUAL = "entrada"
+
+
+def marcar(etapa, estado, item="", **dados):
+    """Evento estruturado no log: `@@ {json}`; dados opcionais: progresso (0-1), msg, n, corte."""
+    global ETAPA_ATUAL
+    ETAPA_ATUAL = etapa
+    ev = {"etapa": etapa, "estado": estado, "item": item, "t": dt.datetime.now().isoformat(timespec="seconds"), **dados}
+    print(PREFIXO_EVENTO + json.dumps(ev, ensure_ascii=False), flush=True)
+
+
+def limpar_legendas(c):
+    """Exatamente 3 legendas não vazias (<= 2200 caracteres); completa com descrição e título."""
+    cand = [*(c.get("legendas") or []), c.get("descricao"), c.get("titulo")]
+    ls = [x.strip()[:2200] for x in cand if isinstance(x, str) and x.strip()][:3]
+    while len(ls) < 3:  # ponytail: sem texto nenhum sobra legenda vazia; o corte já exige título
+        ls.append(ls[-1] if ls else "")
+    return ls
+
+
 def evento(cfg, tipo, dados):
     """Gatilhos das automações do cut.pro: live_started, live_clips, live_ended."""
     print(f"* {tipo}: {dados.get('titulo') or dados.get('lote') or ''}")
@@ -528,10 +554,23 @@ YTDLP = {"quiet": True, "noprogress": True, "ffmpeg_location": FFMPEG, "js_runti
 
 def baixar(url, saida):
     import yt_dlp
+    ultimo = [0.0]
+
+    def hook(d):
+        total = d.get("total_bytes") or d.get("total_bytes_estimate")
+        if d["status"] == "downloading" and total:
+            p = d["downloaded_bytes"] / total
+            if p - ultimo[0] >= 0.05:  # no máximo a cada 5%
+                ultimo[0] = p
+                marcar("baixar", "progresso", progresso=round(p, 2), msg=f"Baixando {p:.0%}")
+
     opts = {**YTDLP, "outtmpl": str(saida / "fonte.%(ext)s"), "format": "bv*[height<=1080]+ba/b",
-            "merge_output_format": "mp4"}
+            "merge_output_format": "mp4", "progress_hooks": [hook]}
+    marcar("baixar", "inicio", msg=f"Baixando {url}")
     with yt_dlp.YoutubeDL(opts) as ydl:
-        return Path(ydl.extract_info(url)["requested_downloads"][0]["filepath"])
+        arq = Path(ydl.extract_info(url)["requested_downloads"][0]["filepath"])
+    marcar("baixar", "fim", arq.stem, msg="Download concluído")
+    return arq
 
 
 def ao_vivo(canal):
@@ -551,11 +590,18 @@ def whisper():
 
 
 def transcrever(video):
-    segmentos, _ = whisper().transcribe(str(video), word_timestamps=True, vad_filter=True)
-    segs, palavras = [], []
+    item = Path(video).stem
+    marcar("transcrever", "inicio", item, msg=f"Transcrevendo {item}")
+    segmentos, info = whisper().transcribe(str(video), word_timestamps=True, vad_filter=True)
+    segs, palavras, ultimo = [], [], 0.0
     for s in segmentos:
         segs.append((s.start, s.end, s.text.strip()))
         palavras += [(w.start, w.end, w.word.strip()) for w in s.words]
+        p = s.end / info.duration if info.duration else 0
+        if p - ultimo >= 0.05:  # no máximo a cada 5%
+            ultimo = p
+            marcar("transcrever", "progresso", item, progresso=round(min(p, 1), 2), msg=f"Transcrevendo {p:.0%}")
+    marcar("transcrever", "fim", item, n=len(segs), msg=f"{len(segs)} falas transcritas")
     return segs, palavras
 
 
@@ -597,17 +643,21 @@ def rodar_agente(nome, exe, sistema, entrada, pasta):
     return json.loads((pasta / "resposta.json").read_text(encoding="utf-8"))
 
 
-def escolher_cortes(transcricao, cfg):
+def escolher_cortes(transcricao, cfg, item=""):
     sistema = SISTEMA.format(dur_min=cfg["dur_min"], dur_max=cfg["dur_max"])
     if cfg["estrategia"]:
         sistema += f"\n\nEstratégia do criador (o que procurar e como escrever os títulos; siga-a):\n{cfg['estrategia']}"
+    marcar("ia", "inicio", item, msg="Escolhendo cortes com a IA")
     with tempfile.TemporaryDirectory() as tmp:  # cwd vazio: o agente não lê CLAUDE.md/AGENTS.md do projeto
         for nome, exe in agentes_disponiveis(os.getenv("RECUT_AGENTE", "")):
             try:
-                return rodar_agente(nome, exe, sistema, transcricao, Path(tmp))["cortes"]
+                cortes = rodar_agente(nome, exe, sistema, transcricao, Path(tmp))["cortes"]
+                marcar("ia", "fim", item, n=len(cortes), msg=f"{nome} sugeriu {len(cortes)} cortes")
+                return cortes
             except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as e:
                 print(f"  {nome} falhou ({str(e)[:200]}); a sessão está ativa? tentando o próximo", file=sys.stderr)
     print("  nenhum agente respondeu; lote sem cortes", file=sys.stderr)
+    marcar("ia", "erro", item, msg="Nenhum agente respondeu")
     return []
 
 
@@ -823,15 +873,19 @@ def processar(video, saida, prefixo, cfg):
     rms = rms_por_segundo(video)
     transcricao = "\n".join(f"[{s:.1f}-{e:.1f}] (energia {energia_relativa(rms, s, e):.1f}x) {t}" for s, e, t in segs)
     print(f"[{prefixo}] analisando {len(segs)} falas com a IA")
-    cortes = aplicar_regra(escolher_cortes(transcricao, cfg), len(rms), cfg["nota_min"],
+    cortes = aplicar_regra(escolher_cortes(transcricao, cfg, prefixo), len(rms), cfg["nota_min"],
                            cfg["dur_min"], cfg["dur_max"], cfg["limite"])
+    marcar("ranking", "fim", prefixo, n=len(cortes), msg=f"{len(cortes)} cortes aprovados pela regra")
     feitos = []
     for i, c in enumerate(cortes, 1):
         nome = f"{prefixo}_corte{i:02d}"
         c["momentos"] = limpar_momentos(c.get("momentos"), c["inicio"], c["fim"])
         print(f"[{prefixo}] {nome} nota {c['nota']:.1f}: {c['titulo']}")
+        marcar("renderizar", "inicio", prefixo, corte=nome, progresso=round((i - 1) / len(cortes), 2),
+               msg=f"Renderizando {nome}")
         renderizar(video, c, palavras, saida, nome, cfg["template"])
-        c = {**c, "arquivo": f"{nome}.mp4", "thumbnail": f"{nome}.jpg", "lote": prefixo, "template": cfg["template"]["nome"],
+        marcar("renderizar", "fim", prefixo, corte=nome, progresso=round(i / len(cortes), 2), msg=f"{nome} pronto")
+        c = {**c, "legendas": limpar_legendas(c), "arquivo": f"{nome}.mp4", "thumbnail": f"{nome}.jpg", "lote": prefixo, "template": cfg["template"]["nome"],
              "duracao": round((c["fim"] - c["inicio"]) / cfg["template"]["velocidade"], 1),
              "criado_em": dt.datetime.now().isoformat(timespec="seconds"),
              # fonte + palavras permitem reaplicar outro template depois sem transcrever de novo
@@ -864,6 +918,7 @@ def clipar_live(canal, info, saida, cfg):
                 novos = processar(lote, pasta, lote.stem, cfg)
                 todos += novos
                 feitos += 1
+                marcar("entrada", "progresso", lote.stem, n=feitos, msg=f"Lote {lote.stem} processado")
                 # índice lido do disco, não da memória: preserva templates reaplicados durante a live
                 atualizar_indices(pasta, stream)
                 evento(cfg, "live_clips", {**stream, "lote": lote.stem, "cortes": novos})
@@ -925,13 +980,18 @@ def main():
     cfg = {"estrategia": carregar_estrategia(a.estrategia), "nota_min": a.nota_min, "limite": a.limite_por_lote,
            "dur_min": a.dur_min, "dur_max": a.dur_max, "dias": a.dias, "horas": a.horas, "webhook": a.webhook,
            "template": tpl}
-    if a.monitorar:
-        monitorar(a.entrada, a.saida, cfg)
-    else:
-        fonte = Path(a.entrada) if Path(a.entrada).exists() else baixar(a.entrada, a.saida)
-        processar(fonte, a.saida, fonte.stem, cfg)
-        # do disco, não da memória: uma reaplicação feita enquanto os outros cortes renderizavam vale
-        gravar_json(a.saida / f"{fonte.stem}_cortes.json", cortes_da_pasta(a.saida, fonte.stem))
+    marcar("entrada", "fim", msg=f"Entrada: {a.entrada}")
+    try:
+        if a.monitorar:
+            monitorar(a.entrada, a.saida, cfg)
+        else:
+            fonte = Path(a.entrada) if Path(a.entrada).exists() else baixar(a.entrada, a.saida)
+            processar(fonte, a.saida, fonte.stem, cfg)
+            # do disco, não da memória: uma reaplicação feita enquanto os outros cortes renderizavam vale
+            gravar_json(a.saida / f"{fonte.stem}_cortes.json", cortes_da_pasta(a.saida, fonte.stem))
+    except Exception as e:
+        marcar(ETAPA_ATUAL, "erro", msg=str(e))
+        raise
 
 
 if __name__ == "__main__":

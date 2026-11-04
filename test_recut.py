@@ -1,11 +1,12 @@
 import datetime as dt
+import json
 from pathlib import Path
 
 import pytest
 
 from recut import (agentes_disponiveis, agrupar_palavras, aplicar_regra, carregar_estrategia, carregar_template,
                    comandos_crop, cor_ass, energia_relativa, extrair_json, filtro_video, legenda_ass, no_horario,
-                   normalizar_template, recorte_vertical, slug, suavizar_trajetoria, ts_ass)
+                   limpar_legendas, marcar, normalizar_template, PREFIXO_EVENTO, recorte_vertical, slug, suavizar_trajetoria, ts_ass)
 
 
 def test_ts_ass():
@@ -276,3 +277,18 @@ def test_emoji_vira_figurinha_na_legenda():
     plano = [(4.0, "emoji", {"emoji": "😂"}), (8.0, "zoom", {"emoji": "🔥"})]
     linhas = [l for l in legenda_ass([], 10, 30, tpl, "", plano).splitlines() if ",Emoji," in l]
     assert len(linhas) == 1 and linhas[0].startswith("Dialogue: 2,0:00:04.00,0:00:05.30,Emoji") and linhas[0].endswith("😂")
+
+
+def test_marcar_emite_linha_json(capsys):
+    marcar("transcrever", "progresso", "lote_0003", progresso=0.62, msg="Transcrevendo lote 3")
+    linha = capsys.readouterr().out.strip()
+    assert linha.startswith(PREFIXO_EVENTO)
+    ev = json.loads(linha[len(PREFIXO_EVENTO):])
+    assert ev["etapa"] == "transcrever" and ev["estado"] == "progresso" and ev["item"] == "lote_0003"
+    assert ev["progresso"] == 0.62 and "t" in ev
+
+
+def test_legendas_completa_e_corta():
+    assert limpar_legendas({"legendas": ["a", "", "b", "c"], "descricao": "d", "titulo": "t"}) == ["a", "b", "c"]
+    assert limpar_legendas({"descricao": "d", "titulo": "t"}) == ["d", "t", "t"]
+    assert len(limpar_legendas({"legendas": ["x" * 3000], "descricao": "d", "titulo": "t"})[0]) == 2200
