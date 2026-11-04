@@ -242,3 +242,12 @@ def test_permalink_falhando_depois_do_publish_fica_ok_sem_link(corte, pasta):
     http = Falso(*instagram("FINISHED")[:-1], (500, {}))
     r = enviar(corte, "instagram", http=http, esperar=lambda s: None, pasta_contas=pasta)
     assert r["estado"] == "ok" and r["link"] is None
+
+
+def test_ok_sem_link_aceita_colar_link_uma_vez(corte, pasta):
+    aprovar(corte, "x", [])
+    enviar(corte, "instagram", http=Falso(*instagram("FINISHED")[:-1], (500, {})), esperar=lambda s: None, pasta_contas=pasta)
+    colar_link(corte, "instagram", "https://www.instagram.com/reel/abc/")
+    assert ler_publicacao(corte, set())["plataformas"]["instagram"]["link"] == "https://www.instagram.com/reel/abc/"
+    with pytest.raises(ValueError, match="não espera link"):  # ok com link: não troca
+        colar_link(corte, "instagram", "https://www.instagram.com/reel/outro/")

@@ -56,9 +56,12 @@ export function PainelAprovacao({ job, cortes, onMudou }: { job: Job; cortes: Co
 function Esperando({ job, corte: c, onMudou }: { job: Job; corte: Corte; onMudou: () => void }) {
   const [legendas, setLegendas] = useState(() => (c.legendas?.length ? c.legendas : [c.descricao || c.titulo]))
   const [escolhida, setEscolhida] = useState(0)
-  const [tags, setTags] = useState(() => c.hashtags.map((t) => ({ t: t.replace(/^#+/, ''), on: true })))
+  const [tags, setTags] = useState(() =>
+    [...new Map(c.hashtags.map((h) => h.replace(/\s+/g, '').replace(/^#+/, '')).filter(Boolean).map((t) => [t.toLowerCase(), t])).values()]
+      .map((t) => ({ t, on: true })),
+  )
   const [nova, setNova] = useState('')
-  const [enviando, setEnviando] = useState(false)
+  const [fase, setFase] = useState<'livre' | 'enviando' | 'aprovado'>('livre')
   const [descartar, setDescartar] = useState(false)
 
   const legenda = legendas[escolhida] ?? ''
@@ -73,14 +76,15 @@ function Esperando({ job, corte: c, onMudou }: { job: Job; corte: Corte; onMudou
   }
 
   async function aprovar() {
-    setEnviando(true) // desabilita já no clique; só volta se falhar (no sucesso o corte sai desta lista)
+    setFase('enviando') // desabilita já no clique; só volta se falhar
     try {
       await api.aprovar(job.id, c.json, legenda, marcadas)
+      setFase('aprovado') // fica travado sem spinner até o próximo polling tirar o corte desta lista
       toast.success('Aprovado: enviando para YouTube e Instagram', { description: 'O TikTok fica com você: baixe o vídeo e cole o link depois.' })
       onMudou()
     } catch (e) {
       erroToast(e)
-      setEnviando(false)
+      setFase('livre')
     }
   }
 
@@ -159,10 +163,11 @@ function Esperando({ job, corte: c, onMudou }: { job: Job; corte: Corte; onMudou
       </div>
 
       <div className="flex gap-2">
-        <Button className="flex-1" disabled={enviando || !legenda.trim()} onClick={aprovar}>
-          {enviando && <Loader2 className="size-4 animate-spin" />} Aprovar e postar
+        <Button className="flex-1" disabled={fase !== 'livre' || !legenda.trim()} onClick={aprovar}>
+          {fase === 'enviando' && <Loader2 className="size-4 animate-spin" />}
+          {fase === 'aprovado' ? <><Check className="size-4" /> Aprovado</> : 'Aprovar e postar'}
         </Button>
-        <Button variant="outline" disabled={enviando} onClick={() => setDescartar(true)}><Trash2 className="size-4" /> Descartar</Button>
+        <Button variant="outline" disabled={fase !== 'livre'} onClick={() => setDescartar(true)}><Trash2 className="size-4" /> Descartar</Button>
       </div>
       <Confirmar
         aberto={descartar}
@@ -237,7 +242,10 @@ function LinhaPlataforma({ job, corte: c, plataforma: p, estado: e, texto, onMud
           <Button variant="ghost" size="icon-xs" aria-label={`Copiar link do ${NOME[p]}`} onClick={() => copiar(e.link!, 'Link')}><Copy className="size-3" /></Button>
         </div>
       ) : (
-        <p className="text-muted-foreground">Postado, mas o link não veio: veja no app.</p>
+        <>
+          <p className="text-muted-foreground">Postado, mas o link não veio: pegue no app e cole aqui.</p>
+          <ColarLink plataforma={p} ocupado={ocupado} onSalvar={(l) => acao('link', l)} />
+        </>
       ))}
 
       {e.estado === 'erro' && (
@@ -253,7 +261,7 @@ function LinhaPlataforma({ job, corte: c, plataforma: p, estado: e, texto, onMud
 
       {e.estado === 'incerto' && (
         <>
-          <p className="break-words text-muted-foreground">{e.erro ?? 'Não deu para confirmar o envio.'} Confira no app antes de enviar de novo.</p>
+          <p className="break-words text-muted-foreground">{e.erro ?? 'Não deu para confirmar o envio: confira no app antes de enviar de novo.'}</p>
           <div className="flex flex-wrap gap-1.5">
             <Button variant="outline" size="sm" disabled={ocupado} onClick={() => setColando(!colando)}>Já saiu (colar link)</Button>
             <Button variant="outline" size="sm" disabled={ocupado} onClick={() => setReenviar(true)}><RotateCcw className="size-3" /> Enviar de novo</Button>

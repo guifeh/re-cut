@@ -113,7 +113,8 @@ def colar_link(corte_json, plataforma, link):
         raise ValueError(f"cole um link https do {plataforma}")
     with _trava:
         pub = _ler(corte_json)
-        if _plataforma(pub, plataforma)["estado"] not in ("manual", "incerto", "erro"):
+        atual = _plataforma(pub, plataforma)
+        if atual["estado"] not in ("manual", "incerto", "erro") and not (atual["estado"] == "ok" and not atual.get("link")):
             raise ValueError("essa plataforma não espera link agora")
         pub["plataformas"][plataforma].update(estado="ok", link=partes.geturl(), erro=None, em=_agora())
         recut.gravar_json(_arquivo(corte_json), pub)
