@@ -10,6 +10,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { api, nomeEntrada, type Corte, type Esteira as DadosEsteira, type EstadoNo, type IdNo, type Job, type NoEsteira, type Plataforma, type ResumoDoDia } from '@/api'
+import { PainelAprovacao } from '@/aprovacao'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -225,7 +226,6 @@ export function Esteira({ jobs }: { jobs: Job[] | null }) {
         ) : (
           <Skeleton className="size-full" />
         )}
-        {/* Task 7: no nó `aprovacao` este painel genérico vira o PainelAprovacao */}
         {aberto && dados && <PainelNo no={aberto} dados={dados} onFechar={() => setAberto(null)} onMudou={atualizar} />}
       </div>
 
@@ -257,7 +257,7 @@ function PainelNo({ no, dados, onFechar, onMudou }: { no: IdNo; dados: { job: Jo
   }
 
   return (
-    <aside className="absolute inset-y-0 right-0 z-10 flex w-80 max-w-full flex-col border-l bg-background/95 backdrop-blur">
+    <aside className={`absolute inset-y-0 right-0 z-10 flex ${no === 'aprovacao' ? 'w-96' : 'w-80'} max-w-full flex-col border-l bg-background/95 backdrop-blur`}>
       <div className="flex items-start justify-between gap-2 border-b p-4">
         <div className="min-w-0">
           <h3 className="font-medium">{NO[no].rotulo}</h3>
@@ -265,34 +265,38 @@ function PainelNo({ no, dados, onFechar, onMudou }: { no: IdNo; dados: { job: Jo
         </div>
         <Button variant="ghost" size="icon-sm" aria-label="Fechar painel" onClick={onFechar}><X className="size-4" /></Button>
       </div>
-      <ul className="flex flex-1 flex-col gap-2 overflow-y-auto p-4">
-        {!estado.itens.length && <li className="text-sm text-muted-foreground">Nenhum item aqui agora.</li>}
-        {estado.itens.map((item) => {
-          const c = porNome.get(item)
-          if (!c) return <li key={item} className="rounded-md border px-3 py-2 text-sm">{item || 'vídeo inteiro'}</li>
-          const pub = plataforma ? c.publicacao?.plataformas?.[plataforma] : undefined
-          return (
-            <li key={item} className="flex gap-3 rounded-md border p-2">
-              <img src={c.thumb_url} alt="" className="aspect-[9/16] w-10 shrink-0 rounded object-cover" loading="lazy" />
-              <div className="flex min-w-0 flex-col gap-1">
-                <span className="line-clamp-2 text-sm leading-snug">{c.titulo}</span>
-                <span className="text-xs text-muted-foreground"><b className="text-primary">{c.nota.toFixed(1)}</b> / 10</span>
-                {pub && (
-                  <span className={`text-xs ${pub.estado === 'ok' ? 'text-emerald-500' : pub.estado === 'erro' || pub.estado === 'incerto' ? 'text-destructive' : 'text-muted-foreground'}`}>
-                    {pub.estado}{pub.erro && `: ${pub.erro}`}
-                  </span>
-                )}
-                {pub?.link && <a href={pub.link} target="_blank" rel="noreferrer" className="truncate text-xs text-primary underline">{pub.link}</a>}
-                {pub?.estado === 'erro' && plataforma !== 'tiktok' && (
-                  <Button variant="outline" size="sm" className="self-start" disabled={ocupado === c.nome} onClick={() => tentar(c, plataforma!)}>
-                    <RotateCcw className="size-3" /> Tentar de novo
-                  </Button>
-                )}
-              </div>
-            </li>
-          )
-        })}
-      </ul>
+      {no === 'aprovacao' ? (
+        <PainelAprovacao job={dados.job} cortes={estado.itens.flatMap((i) => porNome.get(i) ?? [])} onMudou={onMudou} />
+      ) : (
+        <ul className="flex flex-1 flex-col gap-2 overflow-y-auto p-4">
+          {!estado.itens.length && <li className="text-sm text-muted-foreground">Nenhum item aqui agora.</li>}
+          {estado.itens.map((item) => {
+            const c = porNome.get(item)
+            if (!c) return <li key={item} className="rounded-md border px-3 py-2 text-sm">{item || 'vídeo inteiro'}</li>
+            const pub = plataforma ? c.publicacao?.plataformas?.[plataforma] : undefined
+            return (
+              <li key={item} className="flex gap-3 rounded-md border p-2">
+                <img src={c.thumb_url} alt="" className="aspect-[9/16] w-10 shrink-0 rounded object-cover" loading="lazy" />
+                <div className="flex min-w-0 flex-col gap-1">
+                  <span className="line-clamp-2 text-sm leading-snug">{c.titulo}</span>
+                  <span className="text-xs text-muted-foreground"><b className="text-primary">{c.nota.toFixed(1)}</b> / 10</span>
+                  {pub && (
+                    <span className={`text-xs ${pub.estado === 'ok' ? 'text-emerald-500' : pub.estado === 'erro' || pub.estado === 'incerto' ? 'text-destructive' : 'text-muted-foreground'}`}>
+                      {pub.estado}{pub.erro && `: ${pub.erro}`}
+                    </span>
+                  )}
+                  {pub?.link && <a href={pub.link} target="_blank" rel="noreferrer" className="truncate text-xs text-primary underline">{pub.link}</a>}
+                  {pub?.estado === 'erro' && plataforma !== 'tiktok' && (
+                    <Button variant="outline" size="sm" className="self-start" disabled={ocupado === c.nome} onClick={() => tentar(c, plataforma!)}>
+                      <RotateCcw className="size-3" /> Tentar de novo
+                    </Button>
+                  )}
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
     </aside>
   )
 }

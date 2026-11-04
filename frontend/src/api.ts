@@ -185,6 +185,8 @@ export const api = {
   apagarDeVez: (id: string) => post<ItemLixeira>(`/api/lixeira/${id}/apagar`, {}),
   esteira: (jobId: string) => req<{ job: Job; esteira: Esteira }>(`/api/esteira/${jobId}`),
   resumoDoDia: () => req<ResumoDoDia>('/api/esteira/resumo'),
+  aprovar: (jobId: string, json: string, legenda: string, hashtags: string[]) =>
+    post<Publicacao>(`/api/jobs/${jobId}/cortes/aprovar`, { json, legenda, hashtags }),
   publicacao: (jobId: string, json: string, plataforma: Plataforma, acao: 'tentar' | 'forcar' | 'link', link?: string) =>
     post<Publicacao>(`/api/jobs/${jobId}/cortes/publicacao`, { json, plataforma, acao, link }),
   salvarTemplate: (t: Template) => post<Template>('/api/templates', t),
