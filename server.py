@@ -7,15 +7,20 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import subprocess
 import sys
 import threading
 import time
 import uuid
+from datetime import date
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
+import contas
+import esteira
+import publicar
 import recut
 import lixeira as lixeira_mod
 from lixeira import Lixeira
@@ -34,6 +39,9 @@ processos = {}  # id (ou id + REAPLICANDO) -> Popen; só os desta execução do 
 REAPLICANDO = ":reaplicar"  # chave à parte: reaplicar template não espera nem mexe no status do job (ex.: live rodando)
 CORTES_GLOB = "*_corte[0-9]*.json"
 lock = threading.Lock()
+# (json do corte resolvido, plataforma) com envio rodando nesta execução. ler_publicacao recebe o próprio conjunto,
+# não uma cópia: a chave entra antes de "enviando" ser gravado e sai depois do estado final
+enviando_agora = set()
 
 
 def meta(job_dir):
@@ -59,6 +67,8 @@ def resumo(job_dir, com_log=False):
         rel = f.parent.relative_to(RAIZ).as_posix()
         versao = int(f.stat().st_mtime)
         c["json"] = f.relative_to(job_dir).as_posix()
+        c["nome"] = f.stem
+        c["publicacao"] = publicar.ler_publicacao(f, enviando_agora)
         c["video_url"] = f"/files/{rel}/{c['arquivo']}?v={versao}"
         c["thumb_url"] = f"/files/{rel}/{c['thumbnail']}?v={versao}"
         cortes.append(c)
@@ -66,6 +76,18 @@ def resumo(job_dir, com_log=False):
     log = (job_dir / "log.txt").read_text(encoding="utf-8", errors="replace") if (job_dir / "log.txt").exists() else ""
     m["log"] = log[-20000:] if com_log else log.strip().splitlines()[-1:] or [""]
     return m
+
+
+def todos_jobs():
+    return sorted((d for d in JOBS.glob("*") if (d / "job.json").exists()), reverse=True)
+
+
+def esteira_do_job(job_dir):
+    job = resumo(job_dir)
+    log = (job_dir / "log.txt").read_text(encoding="utf-8", errors="replace") if (job_dir / "log.txt").exists() else ""
+    with lock:
+        vivo = job_dir.name in processos
+    return {"job": job, "esteira": esteira.estado(esteira.eventos(log), vivo, job["cortes"])}
 
 
 def criar_job(dados):
@@ -174,12 +196,17 @@ def excluir_video(job_dir):
         return lixeira.excluir_video(job_dir)
 
 
-def excluir_corte(job_dir, dados):
-    rel = dados.get("json")
+def corte_do_job(job_dir, rel):
+    """JSON de um corte desse job (nada fora da pasta dele)."""
     f = (job_dir / str(rel or "")).resolve()
     if not isinstance(rel, str) or not f.is_relative_to(job_dir.resolve()) or not f.is_file() \
             or not re.search(r"_corte\d+\.json$", f.name):
         raise ValueError(f"corte inválido: {rel}")
+    return f
+
+
+def excluir_corte(job_dir, dados):
+    f = corte_do_job(job_dir, dados.get("json"))
     try:
         with lock:  # a live pode seguir gerando cortes; só não dá para excluir no meio de uma reaplicação de template
             if job_dir.name + REAPLICANDO in processos:
@@ -187,6 +214,88 @@ def excluir_corte(job_dir, dados):
             return lixeira.excluir_corte(f)
     finally:  # também quando o corte foi movido só em parte: o índice reflete o que está no disco
         recut.atualizar_indices(f.parent)
+
+
+def _enviar(f, plataforma):
+    try:
+        publicar.enviar(f, plataforma, pasta_contas=contas.PASTA)  # falha no envio fica gravada no .publicacao
+    except Exception as e:  # noqa: BLE001 — só antes de começar (ex.: o corte foi para a Lixeira)
+        print(f"publicação: {plataforma} de {f.name} não começou ({type(e).__name__})", file=sys.stderr)
+    finally:
+        with lock:
+            enviando_agora.discard((str(f), plataforma))
+
+
+def _disparar(f, plataformas, acao):
+    """Registra as chaves ANTES de `acao` gravar "enviando" (senão uma consulta no meio o vira "incerto") e
+    dispara um envio por plataforma que `acao` devolver; as outras chaves saem na hora."""
+    chaves = {(str(f), p) for p in plataformas}
+    with lock:  # checar e registrar juntos: dois cliques não disparam dois envios
+        if chaves & enviando_agora:
+            raise ValueError("esse corte já está sendo enviado; espere terminar")
+        enviando_agora.update(chaves)
+    enviar = []
+    try:
+        enviar = acao()
+    finally:
+        with lock:
+            enviando_agora.difference_update({(str(f), p) for p in plataformas if p not in enviar})
+    for p in enviar:
+        threading.Thread(target=_enviar, args=(f, p), daemon=True).start()
+
+
+def aprovar_corte(job_dir, dados):
+    f = corte_do_job(job_dir, dados.get("json"))
+    legenda, hashtags = dados.get("legenda"), dados.get("hashtags", [])
+    if not isinstance(legenda, str) or not legenda.strip():
+        raise ValueError("escreva a legenda")
+    if not isinstance(hashtags, list) or not all(isinstance(h, str) for h in hashtags):
+        raise ValueError("hashtags deve ser uma lista de textos")
+    _disparar(f, contas.PLATAFORMAS, lambda: publicar.aprovar(f, legenda, hashtags))
+    return publicar.ler_publicacao(f, enviando_agora)
+
+
+def mudar_publicacao(job_dir, dados):
+    f = corte_do_job(job_dir, dados.get("json"))
+    p, acao = dados.get("plataforma"), dados.get("acao")
+    if p not in esteira.PLATAFORMAS:
+        raise ValueError(f"plataforma desconhecida: {p}")
+    if acao == "link":
+        publicar.colar_link(f, p, texto(dados, "link"))
+    elif acao in ("tentar", "forcar"):
+        if p not in contas.PLATAFORMAS:
+            raise ValueError(f"o {p} é manual: cole o link do post")
+        _disparar(f, [p], lambda: publicar.tentar_de_novo(f, p, acao == "forcar") or [p])
+    else:
+        raise ValueError("acao deve ser tentar, forcar ou link")
+    return publicar.ler_publicacao(f, enviando_agora)
+
+
+def texto(dados, chave):
+    v = dados.get(chave)
+    if not isinstance(v, str):
+        raise ValueError(f"{chave} deve ser um texto")
+    return v
+
+
+def desconectar(plataforma):
+    """Tira a conexão e mantém o app (client id/secret) para conectar de novo sem redigitar."""
+    d = contas.ler(plataforma, contas.PASTA)
+    contas.salvar(plataforma, {k: d[k] for k in ("client_id", "client_secret") if k in d}, contas.PASTA)
+    return contas.publico(plataforma, contas.PASTA)
+
+
+def retorno_youtube(query):
+    """Fim do login do Google: troca o código e devolve para onde redirecionar (aba Contas, com o erro se falhou)."""
+    q = parse_qs(query)
+    try:
+        if q.get("error"):
+            raise ValueError(f"login do YouTube não autorizado ({q['error'][0][:50]})")
+        contas.concluir("youtube", q.get("code", [""])[0], q.get("state", [""])[0], pasta=contas.PASTA)
+        return "/?aba=contas"
+    except Exception as e:  # noqa: BLE001 — ValueError de contas já vem sem segredos; o resto só pelo tipo
+        msg = str(e) if isinstance(e, ValueError) else f"falha no login do YouTube ({type(e).__name__})"
+        return "/?aba=contas&erro=" + quote(msg[:200])
 
 
 def restaurar(item_id):
@@ -210,10 +319,14 @@ def item_publico(item):
 
 
 def expirar_periodicamente():
-    """A lixeira se limpa sozinha: na abertura do servidor e depois de hora em hora."""
+    """A lixeira se limpa sozinha e o token do Instagram é renovado: na abertura e depois de hora em hora."""
     while True:
         for item_id in lixeira.expirar():
             print(f"lixeira: {item_id} passou do prazo e foi apagado de vez", file=sys.stderr)
+        try:
+            contas.renovar_instagram(pasta=contas.PASTA)
+        except Exception as e:  # noqa: BLE001 — só o tipo: a mensagem pode carregar token
+            print(f"contas: renovação do Instagram falhou ({type(e).__name__})", file=sys.stderr)
         time.sleep(3600)
 
 
@@ -262,8 +375,19 @@ class Handler(SimpleHTTPRequestHandler):
         partes = url.path.strip("/").split("/")
         try:
             if url.path == "/api/jobs":
-                dirs = sorted((d for d in JOBS.glob("*") if (d / "job.json").exists()), reverse=True)
-                return self.json([resumo(d) for d in dirs])
+                return self.json([resumo(d) for d in todos_jobs()])
+            if url.path == "/api/esteira/resumo":  # antes de /api/esteira/<job>
+                cortes = [c for d in todos_jobs() for c in resumo(d)["cortes"]]
+                return self.json(esteira.resumo_do_dia(cortes, date.today()))
+            if partes[:2] == ["api", "esteira"] and len(partes) == 3:
+                return self.json(esteira_do_job(self.job_dir(partes[2])))
+            if url.path == "/api/contas":
+                return self.json([contas.publico(p, contas.PASTA) for p in contas.PLATAFORMAS])
+            if url.path == "/api/contas/youtube/retorno":
+                self.send_response(302)
+                self.send_header("Location", retorno_youtube(url.query))
+                self.send_header("Content-Length", "0")
+                return self.end_headers()
             if partes[:2] == ["api", "jobs"] and len(partes) == 3:
                 return self.json(resumo(self.job_dir(partes[2]), com_log=True))
             if url.path == "/api/estrategias":
@@ -333,6 +457,22 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.json(item_publico(excluir_video(self.job_dir(partes[2]))))
             if partes[:2] == ["api", "jobs"] and partes[3:] == ["cortes", "excluir"] and len(partes) == 5:
                 return self.json(item_publico(excluir_corte(self.job_dir(partes[2]), self.corpo_json())))
+            if partes[:2] == ["api", "jobs"] and partes[3:] == ["cortes", "aprovar"] and len(partes) == 5:
+                return self.json(aprovar_corte(self.job_dir(partes[2]), self.corpo_json()))
+            if partes[:2] == ["api", "jobs"] and partes[3:] == ["cortes", "publicacao"] and len(partes) == 5:
+                return self.json(mudar_publicacao(self.job_dir(partes[2]), self.corpo_json()))
+            if partes[:2] == ["api", "contas"] and len(partes) == 4:
+                p, acao = partes[2], partes[3]
+                if acao == "configurar":
+                    d = self.corpo_json()
+                    contas.configurar(p, texto(d, "client_id"), texto(d, "client_secret"), pasta=contas.PASTA)
+                    return self.json(contas.publico(p, contas.PASTA))
+                if acao == "conectar":
+                    return self.json({"url": contas.url_autorizacao(p, secrets.token_urlsafe(16), pasta=contas.PASTA)})
+                if acao == "codigo" and p == "instagram":
+                    return self.json(contas.concluir(p, texto(self.corpo_json(), "codigo"), None, pasta=contas.PASTA))
+                if acao == "desconectar":
+                    return self.json(desconectar(p))
             if partes[:2] == ["api", "lixeira"] and len(partes) == 4 and partes[3] == "restaurar":
                 return self.json(item_publico(restaurar(partes[2])))
             if partes[:2] == ["api", "lixeira"] and len(partes) == 4 and partes[3] == "apagar":
