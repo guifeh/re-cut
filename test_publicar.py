@@ -197,3 +197,48 @@ def test_colar_link_valida_dominio(corte):
     t = ler_publicacao(corte, set())["plataformas"]["tiktok"]
     assert t["estado"] == "ok" and t["link"] == "https://www.tiktok.com/@x/video/1"
     colar_link(corte, "youtube", "https://youtu.be/abc")  # incerto agora: aceita
+
+
+def test_5xx_no_put_do_youtube_fica_incerto(corte, pasta):
+    aprovar(corte, "x", [])
+    r = enviar(corte, "youtube", http=Falso(youtube_ok()[0], (503, {"error": "x"})), pasta_contas=pasta)
+    assert r["estado"] == "incerto"
+    with pytest.raises(ValueError):
+        tentar_de_novo(corte, "youtube", forcar=False)
+
+
+def test_4xx_no_put_do_youtube_e_erro(corte, pasta):
+    aprovar(corte, "x", [])
+    assert enviar(corte, "youtube", http=Falso(youtube_ok()[0], (400, {})), pasta_contas=pasta)["estado"] == "erro"
+
+
+def test_publicacao_some_no_meio_do_envio_nao_levanta(corte, pasta):
+    aprovar(corte, "x", [])
+
+    def lixeira_no_meio(metodo, url, **kw):
+        corte.with_suffix(".publicacao").unlink(missing_ok=True)
+        raise OSError("caiu")
+    r = enviar(corte, "youtube", http=lixeira_no_meio, pasta_contas=pasta)
+    assert r["estado"] == "erro" and not corte.with_suffix(".publicacao").exists()  # não recria o arquivo
+
+
+@pytest.mark.parametrize("publicar", [OSError("caiu"), (200, {})])
+def test_media_publish_sem_resposta_fica_incerto(corte, pasta, publicar):
+    aprovar(corte, "x", [])
+    falso = Falso(*instagram("FINISHED")[:3], (200, {}))
+
+    def http(metodo, url, **kw):
+        if "media_publish" in url:
+            if isinstance(publicar, Exception):
+                raise publicar
+            falso.respostas.insert(0, publicar)
+        return falso(metodo, url, **kw)
+    r = enviar(corte, "instagram", http=http, esperar=lambda s: None, pasta_contas=pasta)
+    assert r["estado"] == "incerto"
+
+
+def test_permalink_falhando_depois_do_publish_fica_ok_sem_link(corte, pasta):
+    aprovar(corte, "x", [])
+    http = Falso(*instagram("FINISHED")[:-1], (500, {}))
+    r = enviar(corte, "instagram", http=http, esperar=lambda s: None, pasta_contas=pasta)
+    assert r["estado"] == "ok" and r["link"] is None

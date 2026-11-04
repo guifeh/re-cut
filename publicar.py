@@ -24,7 +24,7 @@ _trava = threading.Lock()
 
 
 class Recusado(ValueError):
-    """A plataforma respondeu que não: o vídeo não saiu."""
+    """A plataforma respondeu 4xx: o vídeo não saiu. (5xx num passo que publica vira "incerto": pode ter saído.)"""
 
 
 def _arquivo(corte_json):
@@ -47,6 +47,8 @@ def _estado(estado, **extra):
 def _mudar(corte_json, plataforma, estado, **campos):
     with _trava:
         pub = _ler(corte_json)
+        if plataforma not in pub.get("plataformas", {}):  # corte foi para a Lixeira no meio do envio: não recria
+            return _estado(estado, **campos)
         pub["plataformas"][plataforma] = {**pub["plataformas"][plataforma], "estado": estado, "em": _agora(), **campos}
         recut.gravar_json(_arquivo(corte_json), pub)
         return pub["plataformas"][plataforma]
@@ -120,7 +122,7 @@ def colar_link(corte_json, plataforma, link):
 def _json(resposta, rotulo):
     status, _, corpo = resposta
     if not 200 <= status < 300:
-        raise Recusado(f"{rotulo} recusado ({status}): {corpo.decode('utf-8', 'replace')[:300]}")
+        raise (Recusado if status < 500 else ValueError)(f"{rotulo} recusado ({status}): {corpo.decode('utf-8', 'replace')[:300]}")
     return json.loads(corpo)
 
 
