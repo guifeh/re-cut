@@ -37,6 +37,15 @@ export type Publicacao = {
   plataformas?: Partial<Record<Plataforma, EstadoPlataforma>>
 }
 
+export type Conta = {
+  plataforma: 'youtube' | 'instagram'
+  configurada: boolean
+  conectada: boolean
+  nome: string | null
+  vence_em: string | null
+  dias_restantes: number | null
+}
+
 export type IdNo = 'entrada' | 'baixar' | 'transcrever' | 'ia' | 'renderizar' | 'ranking' | 'aprovacao' | Plataforma
 export type EstadoNo = 'ocioso' | 'rodando' | 'ok' | 'erro' | 'esperando'
 /** progresso de 0 a 1; itens = vídeos/lotes (etapas) ou nomes de cortes (aprovação e plataformas) */
@@ -189,6 +198,12 @@ export const api = {
     post<Publicacao>(`/api/jobs/${jobId}/cortes/aprovar`, { json, legenda, hashtags }),
   publicacao: (jobId: string, json: string, plataforma: Plataforma, acao: 'tentar' | 'forcar' | 'link', link?: string) =>
     post<Publicacao>(`/api/jobs/${jobId}/cortes/publicacao`, { json, plataforma, acao, link }),
+  contas: () => req<Conta[]>('/api/contas'),
+  configurarConta: (p: Conta['plataforma'], client_id: string, client_secret: string) =>
+    post<Conta>(`/api/contas/${p}/configurar`, { client_id, client_secret }),
+  conectarConta: (p: Conta['plataforma']) => post<{ url: string }>(`/api/contas/${p}/conectar`, {}),
+  codigoInstagram: (codigo: string) => post<Conta>('/api/contas/instagram/codigo', { codigo }),
+  desconectarConta: (p: Conta['plataforma']) => post<Conta>(`/api/contas/${p}/desconectar`, {}),
   salvarTemplate: (t: Template) => post<Template>('/api/templates', t),
   aplicarTemplate: (jobId: string, template: string, cortes?: string[]) =>
     post<Job>(`/api/jobs/${jobId}/aplicar_template`, { template, cortes }),

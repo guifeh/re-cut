@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Clapperboard, Copy, Download, Film, Palette, Radio, Scissors, Sparkles, Square, Trash2, Upload, Workflow } from 'lucide-react'
+import { Clapperboard, Copy, Download, Film, Palette, Radio, Scissors, Sparkles, Square, Trash2, Upload, UserRound, Workflow } from 'lucide-react'
 import { api, jobDoCorte, nomeEntrada, parseHoras, upload, type Corte, type Estrategia, type Job, type Template } from '@/api'
+import { Contas } from '@/contas'
 import { Esteira } from '@/esteira'
 import { Confirmar, Lixeira, porDias, usePrazoLixeira } from '@/lixeira'
 import { PreviaTemplate, TIPO_MOMENTO, Templates } from '@/templates'
@@ -19,7 +20,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 
-const ABAS = ['esteira', 'cortar', 'cortes', 'templates', 'estrategias', 'lixeira']
+const ABAS = ['esteira', 'cortar', 'cortes', 'templates', 'estrategias', 'contas', 'lixeira']
 const abaDaUrl = () => {
   const a = new URLSearchParams(location.search).get('aba') ?? ''
   return ABAS.includes(a) ? a : 'esteira'
@@ -88,6 +89,7 @@ export default function App() {
               <TabsTrigger value="cortes">Cortes {cortes.length > 0 && <Badge variant="secondary" className="ml-1">{cortes.length}</Badge>}</TabsTrigger>
               <TabsTrigger value="templates">Templates</TabsTrigger>
               <TabsTrigger value="estrategias">Estratégias</TabsTrigger>
+              <TabsTrigger value="contas"><UserRound className="size-3.5" /> Contas</TabsTrigger>
               <TabsTrigger value="lixeira"><Trash2 className="size-3.5" /> Lixeira</TabsTrigger>
             </TabsList>
 
@@ -106,6 +108,10 @@ export default function App() {
 
             <TabsContent value="templates" className="mt-6">
               <Templates templates={templates} onSalvo={(t) => setTemplates((l) => [...l.filter((x) => x.nome !== t.nome), t].sort((a, b) => a.nome.localeCompare(b.nome)))} />
+            </TabsContent>
+
+            <TabsContent value="contas" className="mt-6">
+              <Contas />
             </TabsContent>
 
             <TabsContent value="lixeira" className="mt-6">
