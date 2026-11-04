@@ -19,6 +19,11 @@ import { Toaster } from '@/components/ui/sonner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 
+const ABAS = ['esteira', 'cortar', 'cortes', 'templates', 'estrategias', 'lixeira']
+const abaDaUrl = () => {
+  const a = new URLSearchParams(location.search).get('aba') ?? ''
+  return ABAS.includes(a) ? a : 'esteira'
+}
 const DIAS = ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom']
 const STATUS: Record<Job['status'], { texto: string; classe: string }> = {
   rodando: { texto: 'processando', classe: 'bg-primary/15 text-primary' },
@@ -35,7 +40,7 @@ export default function App() {
   const [estrategias, setEstrategias] = useState<Estrategia[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
   const [agentes, setAgentes] = useState<string[]>([])
-  const [aba, setAba] = useState(() => new URLSearchParams(location.search).get('aba') ?? 'esteira')
+  const [aba, setAba] = useState(abaDaUrl)
   const [aberto, setAberto] = useState<Corte | null>(null)
 
   const atualizar = useCallback(() => api.jobs().then(setJobs).catch(() => setJobs((j) => j ?? [])), [])

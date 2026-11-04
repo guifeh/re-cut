@@ -39,6 +39,8 @@ const BORDA: Record<EstadoNo, string> = {
 const CORAL = '#ff6d5a'
 const PASSO = 176 // distância entre os nós da linha
 const MAX_CARTOES = 3 // por nó; o resto vira um cartão "+N"
+// o tema do app é fixo (class="dark" no index.html, sem ThemeProvider: o useTheme do next-themes não saberia)
+const ESCURO = document.documentElement.classList.contains('dark')
 const temProperty = typeof CSS !== 'undefined' && 'registerProperty' in CSS
 
 type DadosNo = { no: IdNo; estado: EstadoNo; progresso: number | null; msg: string }
@@ -182,7 +184,6 @@ export function Esteira({ jobs }: { jobs: Job[] | null }) {
   const jobId = jobs?.some((j) => j.id === escolhido) ? escolhido : (jobs?.find((j) => j.status === 'rodando') ?? jobs?.[0])?.id ?? null
   const { dados, resumo, atualizar } = useEsteira(jobId)
   const fluxo = useMemo(() => dados && montar(dados.esteira, dados.job.cortes), [dados])
-  const escuro = document.documentElement.classList.contains('dark')
 
   if (jobs === null) return <Skeleton className="h-[440px] w-full" />
   if (!jobs.length)
@@ -206,7 +207,7 @@ export function Esteira({ jobs }: { jobs: Job[] | null }) {
             edges={fluxo.ligacoes}
             nodeTypes={tiposNo}
             edgeTypes={tiposLigacao}
-            colorMode={escuro ? 'dark' : 'light'}
+            colorMode={ESCURO ? 'dark' : 'light'}
             style={{ background: 'transparent' }}
             nodesDraggable={false}
             nodesConnectable={false}
