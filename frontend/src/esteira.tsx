@@ -40,7 +40,6 @@ const BORDA: Record<EstadoVisto, string> = {
   erro: 'border-2 border-destructive',
   esperando: 'border-2 border-orange-400',
 }
-const CORAL = '#ff6d5a'
 const PASSO = 176 // distância entre os nós da linha
 const MAX_CARTOES = 3 // por nó; o resto vira um cartão "+N"
 // o tema do app é fixo (class="dark" no index.html, sem ThemeProvider: o useTheme do next-themes não saberia)
@@ -100,10 +99,10 @@ function NoEtapa({ data }: NodeProps<NoFluxo>) {
       >
         {data.estado === 'rodando' && !temProperty && (
           <span className="absolute -inset-[3px] -z-10 overflow-hidden rounded-[19px]">
-            <span className="absolute -inset-1/2 animate-spin [animation-duration:1.5s]" style={{ background: `conic-gradient(${CORAL} 0 20%, ${CORAL}33 35% 65%, ${CORAL} 90%)` }} />
+            <span className="absolute -inset-1/2 animate-spin [animation-duration:1.5s]" style={{ background: 'conic-gradient(var(--esteira-giro))' }} />
           </span>
         )}
-        <Icone className={`size-8 ${data.estado === 'rodando' ? 'text-[#ff6d5a]' : data.estado === 'ocioso' ? 'text-muted-foreground' : 'text-foreground'}`} />
+        <Icone className={`size-8 ${data.estado === 'rodando' ? 'text-(--esteira-coral)' : data.estado === 'ocioso' ? 'text-muted-foreground' : 'text-foreground'}`} />
         {data.estado === 'ok' && (
           <span className="absolute -right-2 -top-2 grid size-5 place-items-center rounded-full bg-emerald-500 text-white"><Check className="size-3" strokeWidth={3} /></span>
         )}
@@ -129,7 +128,7 @@ function Ligacao({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPos
   const [caminho, x, y] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
   return (
     <>
-      <BaseEdge path={caminho} style={{ strokeWidth: 2, stroke: data?.ok ? '#10b981' : 'color-mix(in oklab, var(--muted-foreground) 60%, transparent)' }} />
+      <BaseEdge path={caminho} style={{ strokeWidth: 2, stroke: data?.ok ? 'var(--esteira-ok)' : 'color-mix(in oklab, var(--muted-foreground) 60%, transparent)' }} />
       {!!data?.n && (
         <EdgeLabelRenderer>
           <span
