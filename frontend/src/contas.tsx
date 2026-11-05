@@ -82,7 +82,8 @@ function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void 
   const [id, setId] = useState('')
   const [segredo, setSegredo] = useState('')
   const [codigo, setCodigo] = useState('')
-  const [esperaCodigo, setEsperaCodigo] = useState(false)
+  const [urlLogin, setUrlLogin] = useState<string | null>(null) // Instagram: login aberto, esperando o código
+  const [trocando, setTrocando] = useState(false)
   const [ocupado, setOcupado] = useState(false)
 
   async function agir(fn: () => Promise<void>) {
@@ -102,6 +103,7 @@ function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void 
       await api.configurarConta(c.plataforma, id.trim(), segredo.trim())
       setId('')
       setSegredo('')
+      setTrocando(false)
       toast.success(`${info.nome}: credenciais salvas`)
       onMudou()
     })
@@ -113,8 +115,8 @@ function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void 
       if (c.plataforma === 'youtube') {
         location.href = url // o Google volta por /api/contas/youtube/retorno
       } else {
-        window.open(url, '_blank', 'noopener')
-        setEsperaCodigo(true)
+        window.open(url, '_blank', 'noopener') // pode ser bloqueado (vem depois de um await): por isso o link guardado
+        setUrlLogin(url)
       }
     })
 
@@ -123,7 +125,7 @@ function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void 
     return agir(async () => {
       await api.codigoInstagram(codigo.trim())
       setCodigo('')
-      setEsperaCodigo(false)
+      setUrlLogin(null)
       toast.success('Instagram conectado')
       onMudou()
     })
@@ -132,7 +134,7 @@ function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void 
   const desconectar = () =>
     agir(async () => {
       await api.desconectarConta(c.plataforma)
-      setEsperaCodigo(false)
+      setUrlLogin(null)
       toast(`${info.nome} desconectado`, { description: 'As credenciais do app continuam salvas.' })
       onMudou()
     })
@@ -162,11 +164,11 @@ function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void 
         {vencendo && (
           <p role="alert" className="flex items-start gap-2 rounded-md bg-amber-500/15 p-2 text-sm text-amber-400">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-            Faltam {c.dias_restantes} dias e a renovação automática não conseguiu renovar; reconecte.
+            Falta{c.dias_restantes === 1 ? '' : 'm'} {c.dias_restantes} {c.dias_restantes === 1 ? 'dia' : 'dias'} e a renovação automática não conseguiu renovar; reconecte.
           </p>
         )}
 
-        {!c.configurada && (
+        {(!c.configurada || trocando) && (
           <form onSubmit={salvar} className="flex flex-col gap-3">
             <div className="flex flex-col gap-2">
               <Label htmlFor={`${c.plataforma}-id`}>{info.id}</Label>
@@ -174,25 +176,28 @@ function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void 
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor={`${c.plataforma}-segredo`}>{info.segredo}</Label>
-              <Input id={`${c.plataforma}-segredo`} type="password" value={segredo} onChange={(e) => setSegredo(e.target.value)} autoComplete="off" required />
+              <Input id={`${c.plataforma}-segredo`} type="password" value={segredo} onChange={(e) => setSegredo(e.target.value)} autoComplete="new-password" required />
             </div>
             <Button type="submit" disabled={ocupado}>{ocupado && <Loader2 className="size-4 animate-spin" />} Salvar credenciais</Button>
+            {trocando && <Button type="button" variant="ghost" onClick={() => { setTrocando(false); setId(''); setSegredo('') }}>Cancelar</Button>}
           </form>
         )}
 
         {c.configurada && !c.conectada && (
-          <>
-            <Button onClick={conectar} disabled={ocupado}>{ocupado && <Loader2 className="size-4 animate-spin" />} Conectar</Button>
-            {esperaCodigo && c.plataforma === 'instagram' && (
-              <form onSubmit={enviarCodigo} className="flex flex-col gap-2">
-                <Label htmlFor="instagram-codigo">Cole o código</Label>
-                <div className="flex gap-2">
-                  <Input id="instagram-codigo" value={codigo} onChange={(e) => setCodigo(e.target.value)} autoComplete="off" required />
-                  <Button type="submit" variant="outline" disabled={ocupado}>Enviar</Button>
-                </div>
-              </form>
-            )}
-          </>
+          <Button onClick={conectar} disabled={ocupado}>{ocupado && <Loader2 className="size-4 animate-spin" />} Conectar</Button>
+        )}
+
+        {urlLogin && c.plataforma === 'instagram' && (
+          <form onSubmit={enviarCodigo} className="flex flex-col gap-2">
+            <Label htmlFor="instagram-codigo">Cole o código</Label>
+            <div className="flex gap-2">
+              <Input id="instagram-codigo" value={codigo} onChange={(e) => setCodigo(e.target.value)} autoComplete="off" required />
+              <Button type="submit" variant="outline" disabled={ocupado}>Enviar</Button>
+            </div>
+            <a href={urlLogin} target="_blank" rel="noopener noreferrer" className="text-xs text-muted-foreground underline">
+              A aba não abriu? Abrir o login do Instagram
+            </a>
+          </form>
         )}
 
         {c.conectada && (
@@ -200,6 +205,10 @@ function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void 
             {vencendo && <Button onClick={conectar} disabled={ocupado}>Reconectar</Button>}
             <Button variant="outline" onClick={desconectar} disabled={ocupado}>Desconectar</Button>
           </div>
+        )}
+
+        {c.configurada && !trocando && (
+          <Button variant="ghost" size="sm" className="self-start text-muted-foreground" onClick={() => setTrocando(true)}>Trocar credenciais</Button>
         )}
 
         <details className="group text-sm">
