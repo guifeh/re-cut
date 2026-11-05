@@ -3,6 +3,7 @@
 Cada job roda `recut.py` num subprocesso: o log é o stdout, os cortes são os .json que ele grava,
 e parar um monitoramento é encerrar o processo.
 """
+import ipaddress
 import json
 import mimetypes
 import os
@@ -30,6 +31,7 @@ JOBS = RAIZ / "jobs"
 UPLOADS = RAIZ / "uploads"
 DIST = RAIZ / "frontend" / "dist"
 PORTA = int(os.getenv("PORT", "8000"))
+REDE = os.getenv("RECUT_REDE") == "1"  # abre para a rede local (sem senha: quem está na rede usa tudo)
 MAX_UPLOAD = 20 * 1024 ** 3  # 20 GB
 LIXEIRA = RAIZ / "lixeira"
 ARQUIVOS_SERVIDOS = (".mp4", ".jpg", ".png")  # /files só entrega mídia; .json e o registro têm caminhos locais
@@ -342,6 +344,14 @@ def parar_job(jid):
     return m
 
 
+def eh_ip(nome):
+    try:
+        ipaddress.ip_address(nome.strip("[]"))
+        return True
+    except ValueError:
+        return False
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=str(DIST), **kw)
@@ -368,9 +378,10 @@ class Handler(SimpleHTTPRequestHandler):
         return d
 
     def host_permitido(self):
-        """Só aceita o próprio endereço: outro Host é DNS rebinding (um site de fora falando com a API local)."""
-        porta = self.server.server_address[1]
-        if self.headers.get("Host") in (f"127.0.0.1:{porta}", f"localhost:{porta}"):
+        """Só aceita localhost ou IP na porta certa: Host com nome de domínio é DNS rebinding (um site de fora
+        falando com a API local). IP literal é seguro e é como a rede local chega quando RECUT_REDE=1."""
+        nome, _, porta = (self.headers.get("Host") or "").rpartition(":")
+        if porta == str(self.server.server_address[1]) and (nome == "localhost" or eh_ip(nome)):
             return True
         self.json({"erro": "host não permitido"}, 403)
         return False
@@ -531,4 +542,7 @@ if __name__ == "__main__":
     JOBS.mkdir(exist_ok=True)
     threading.Thread(target=expirar_periodicamente, daemon=True).start()
     print(f"re-cut em http://localhost:{PORTA}")
-    ThreadingHTTPServer(("127.0.0.1", PORTA), Handler).serve_forever()
+    if REDE:
+        import socket
+        print(f"na rede: http://{socket.gethostbyname(socket.gethostname())}:{PORTA} (sem senha: qualquer um na rede usa)")
+    ThreadingHTTPServer(("0.0.0.0" if REDE else "127.0.0.1", PORTA), Handler).serve_forever()

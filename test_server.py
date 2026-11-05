@@ -249,6 +249,9 @@ def test_host_estranho_e_recusado(servidor, monkeypatch):
     assert pedir(servidor, f"/api/esteira/{JID}", cabecalhos=rebind) == (403, {"erro": "host não permitido"})
     assert pedir(servidor, APROVAR, PEDIDO, rebind)[0] == 403
     assert pedir(servidor, "/api/jobs", cabecalhos={"Host": f"localhost:{servidor}"})[0] == 200
+    assert pedir(servidor, "/api/jobs", cabecalhos={"Host": f"192.168.0.10:{servidor}"})[0] == 200
+    assert pedir(servidor, "/api/jobs", cabecalhos={"Host": f"192.168.0.10:{servidor + 1}"})[0] == 403
+    assert pedir(servidor, "/api/jobs", cabecalhos={"Host": "192.168.0.10"})[0] == 403
     assert not corte().with_suffix(".publicacao").exists() and not chamadas
 
 
