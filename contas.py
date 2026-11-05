@@ -87,6 +87,8 @@ def configurar(plataforma, client_id, client_secret, pasta=PASTA):
         raise ValueError("preencha o client id e o client secret")
     with _trava:
         d = ler(plataforma, pasta)
+        if d.get("client_id") != client_id:  # outro app: tokens, nome e validade eram do app antigo
+            d = {}
         salvar(plataforma, {**d, "client_id": client_id, "client_secret": client_secret}, pasta)
 
 

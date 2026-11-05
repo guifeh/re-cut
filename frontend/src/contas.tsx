@@ -202,7 +202,8 @@ function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void 
 
         {c.conectada && (
           <div className="flex gap-2">
-            {vencendo && <Button onClick={conectar} disabled={ocupado}>Reconectar</Button>}
+            {/* YouTube: o refresh token pode ter sido revogado sem a tela saber; reconectar é o mesmo fluxo */}
+            {(vencendo || c.plataforma === 'youtube') && <Button onClick={conectar} disabled={ocupado}>Reconectar</Button>}
             <Button variant="outline" onClick={desconectar} disabled={ocupado}>Desconectar</Button>
           </div>
         )}

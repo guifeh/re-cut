@@ -210,3 +210,12 @@ def test_desconectar_mantem_o_app(tmp_path):
                        "vence_em": "2999-01-01T00:00:00", "nome": "canal"}, tmp_path)
     assert desconectar("youtube", tmp_path)["conectada"] is False
     assert ler("youtube", tmp_path) == {"client_id": "c", "client_secret": "s"}
+
+
+def test_trocar_client_id_apaga_tokens_do_app_antigo(tmp_path):
+    salvar("youtube", {"client_id": "c", "client_secret": "s", "access_token": "t", "refresh_token": "r",
+                       "vence_em": "2999-01-01T00:00:00", "nome": "canal"}, tmp_path)
+    configurar("youtube", "c", "s2", tmp_path)  # mesmo app, segredo novo: mantém a conexão
+    assert ler("youtube", tmp_path)["refresh_token"] == "r"
+    configurar("youtube", "outro", "s3", tmp_path)
+    assert ler("youtube", tmp_path) == {"client_id": "outro", "client_secret": "s3"}
