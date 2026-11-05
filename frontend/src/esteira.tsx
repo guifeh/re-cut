@@ -11,12 +11,12 @@ import {
 } from 'lucide-react'
 import { api, nomeEntrada, type Corte, type Esteira as DadosEsteira, type EstadoNo, type IdNo, type Job, type NoEsteira, type Plataforma, type ResumoDoDia } from '@/api'
 import { PainelAprovacao } from '@/aprovacao'
+import { COR_PUBLICACAO, NOME_PLATAFORMA, PLATAFORMAS } from '@/plataformas'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 
 const ETAPAS: IdNo[] = ['entrada', 'baixar', 'transcrever', 'ia', 'renderizar', 'ranking', 'aprovacao']
-const PLATAFORMAS: Plataforma[] = ['youtube', 'instagram', 'tiktok']
 const NO: Record<IdNo, { rotulo: string; Icone: LucideIcon }> = {
   entrada: { rotulo: 'Entrada', Icone: Inbox },
   baixar: { rotulo: 'Baixar', Icone: Download },
@@ -25,9 +25,9 @@ const NO: Record<IdNo, { rotulo: string; Icone: LucideIcon }> = {
   renderizar: { rotulo: 'Renderizar', Icone: Clapperboard },
   ranking: { rotulo: 'Ranking + legendas', Icone: Trophy },
   aprovacao: { rotulo: 'Sua aprovação', Icone: UserCheck },
-  youtube: { rotulo: 'YouTube Shorts', Icone: MonitorPlay },
-  instagram: { rotulo: 'Instagram Reels', Icone: Camera },
-  tiktok: { rotulo: 'TikTok', Icone: Smartphone },
+  youtube: { rotulo: `${NOME_PLATAFORMA.youtube} Shorts`, Icone: MonitorPlay },
+  instagram: { rotulo: `${NOME_PLATAFORMA.instagram} Reels`, Icone: Camera },
+  tiktok: { rotulo: NOME_PLATAFORMA.tiktok, Icone: Smartphone },
 }
 // 'sem-sinal': o nó estava rodando mas o servidor não responde; não anima um processo que pode ter parado
 type EstadoVisto = EstadoNo | 'sem-sinal'
@@ -290,7 +290,7 @@ function PainelNo({ no, dados, onFechar, onMudou }: { no: IdNo; dados: { job: Jo
                   <span className="line-clamp-2 text-sm leading-snug">{c.titulo}</span>
                   <span className="text-xs text-muted-foreground"><b className="text-primary">{c.nota.toFixed(1)}</b> / 10</span>
                   {pub && (
-                    <span className={`text-xs ${pub.estado === 'ok' ? 'text-emerald-500' : pub.estado === 'erro' || pub.estado === 'incerto' ? 'text-destructive' : 'text-muted-foreground'}`}>
+                    <span className={`text-xs ${COR_PUBLICACAO[pub.estado]}`}>
                       {pub.estado}{pub.erro && `: ${pub.erro}`}
                     </span>
                   )}

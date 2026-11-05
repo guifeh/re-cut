@@ -3,12 +3,12 @@ import { toast } from 'sonner'
 import { Check, Copy, Download, ExternalLink, Loader2, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { api, type Corte, type EstadoPlataforma, type Job, type Plataforma } from '@/api'
 import { Confirmar } from '@/lixeira'
+import { COR_PUBLICACAO, NOME_PLATAFORMA as NOME, PLATAFORMAS } from '@/plataformas'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 
 const LIMITE = 2200
-const NOME: Record<Plataforma, string> = { youtube: 'YouTube', instagram: 'Instagram', tiktok: 'TikTok' }
 const tamanho = (s: string) => Array.from(s).length // o servidor conta caracteres do Python (code points), não UTF-16
 
 /** Espelho de `publicar.texto_final`: legenda + linha em branco + até 30 hashtags, tudo em até 2200 caracteres. */
@@ -195,7 +195,7 @@ function Aprovado({ job, corte: c, onMudou }: { job: Job; corte: Corte; onMudou:
         </div>
       </div>
       <ul className="flex flex-col divide-y">
-        {(['youtube', 'instagram', 'tiktok'] as Plataforma[]).map((p) => {
+        {PLATAFORMAS.map((p) => {
           const e = pub.plataformas?.[p]
           return e ? <LinhaPlataforma key={p} job={job} corte={c} plataforma={p} estado={e} texto={texto} onMudou={onMudou} /> : null
         })}
@@ -230,7 +230,7 @@ function LinhaPlataforma({ job, corte: c, plataforma: p, estado: e, texto, onMud
     <li className="flex flex-col gap-1.5 py-2 text-xs">
       <div className="flex items-center justify-between gap-2">
         <span className="font-medium">{NOME[p]}</span>
-        <span className={e.estado === 'ok' ? 'text-emerald-500' : e.estado === 'erro' || e.estado === 'incerto' ? 'text-destructive' : 'text-muted-foreground'}>
+        <span className={COR_PUBLICACAO[e.estado]}>
           {e.estado === 'enviando' ? <span className="inline-flex items-center gap-1"><Loader2 className="size-3 animate-spin" /> enviando…</span>
             : { ok: 'postado', erro: 'erro', incerto: 'incerto', manual: 'com você' }[e.estado]}
         </span>

@@ -7,13 +7,13 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { NOME_PLATAFORMA } from '@/plataformas'
 
 const erroToast = (e: unknown) => toast.error((e as Error).message)
 
 // Resumo de docs/contas-passo-a-passo.md (a fonte); o guia completo fica nesse arquivo do repositório.
-const PASSOS: Record<Conta['plataforma'], { nome: string; id: string; segredo: string; passos: string[] }> = {
+const PASSOS: Record<Conta['plataforma'], { id: string; segredo: string; passos: string[] }> = {
   youtube: {
-    nome: 'YouTube',
     id: 'Client ID',
     segredo: 'Client secret',
     passos: [
@@ -25,7 +25,6 @@ const PASSOS: Record<Conta['plataforma'], { nome: string; id: string; segredo: s
     ],
   },
   instagram: {
-    nome: 'Instagram',
     id: 'Instagram app ID',
     segredo: 'Instagram app secret',
     passos: [
@@ -79,6 +78,7 @@ export function Contas() {
 
 function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void }) {
   const info = PASSOS[c.plataforma]
+  const nome = NOME_PLATAFORMA[c.plataforma]
   const [id, setId] = useState('')
   const [segredo, setSegredo] = useState('')
   const [codigo, setCodigo] = useState('')
@@ -104,7 +104,7 @@ function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void 
       setId('')
       setSegredo('')
       setTrocando(false)
-      toast.success(`${info.nome}: credenciais salvas`)
+      toast.success(`${nome}: credenciais salvas`)
       onMudou()
     })
   }
@@ -135,7 +135,7 @@ function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void 
     agir(async () => {
       await api.desconectarConta(c.plataforma)
       setUrlLogin(null)
-      toast(`${info.nome} desconectado`, { description: 'As credenciais do app continuam salvas.' })
+      toast(`${nome} desconectado`, { description: 'As credenciais do app continuam salvas.' })
       onMudou()
     })
 
@@ -145,7 +145,7 @@ function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void 
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          {info.nome}
+          {nome}
           {c.conectada ? (
             <Badge variant="secondary" className="text-emerald-400"><CheckCircle2 className="size-3" /> Conectada</Badge>
           ) : (
