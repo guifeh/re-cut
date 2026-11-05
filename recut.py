@@ -880,7 +880,6 @@ def processar(video, saida, prefixo, cfg):
     print(f"[{prefixo}] analisando {len(segs)} falas com a IA")
     cortes = aplicar_regra(escolher_cortes(transcricao, cfg, prefixo), len(rms), cfg["nota_min"],
                            cfg["dur_min"], cfg["dur_max"], cfg["limite"])
-    marcar("ranking", "fim", prefixo, n=len(cortes), msg=f"{len(cortes)} cortes aprovados pela regra")
     feitos = []
     if cortes:
         marcar("renderizar", "inicio", prefixo, n=len(cortes), msg=f"Renderizando {len(cortes)} cortes")
@@ -900,6 +899,8 @@ def processar(video, saida, prefixo, cfg):
         feitos.append(publico(c))
     if cortes:
         marcar("renderizar", "fim", prefixo, n=len(cortes), msg=f"{len(cortes)} cortes renderizados")
+    # depois de renderizar: o cartão do item termina em Ranking, e Ranking só fica verde com os cortes prontos
+    marcar("ranking", "fim", prefixo, n=len(cortes), msg=f"{len(cortes)} cortes aprovados pela regra")
     return feitos
 
 
@@ -925,7 +926,7 @@ def clipar_live(canal, info, saida, cfg):
                 novos = processar(lote, pasta, lote.stem, cfg)
                 todos += novos
                 feitos += 1
-                marcar("entrada", "progresso", lote.stem, n=feitos, msg=f"Lote {lote.stem} processado")
+                marcar("entrada", "progresso", n=feitos, msg=f"Lote {lote.stem} processado")
                 # índice lido do disco, não da memória: preserva templates reaplicados durante a live
                 atualizar_indices(pasta, stream)
                 evento(cfg, "live_clips", {**stream, "lote": lote.stem, "cortes": novos})

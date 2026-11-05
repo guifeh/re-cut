@@ -69,8 +69,13 @@ def estado(evs: list[dict], vivo: bool, cortes: list[dict]) -> dict:
         if etapa not in por_etapa:
             continue
         por_etapa[etapa].append(ev)
-        atual.pop(item, None)  # reinsere: ordem = chegada na etapa
-        atual[item] = etapa
+        # item vazio (a entrada do job) conta para o estado do nó, mas não é cartão. O cartão só anda para a
+        # frente (logs antigos marcavam ranking antes de renderizar) ou recomeça em transcrever: numa live a
+        # transmissão seguinte repete os nomes dos lotes (lote_0000 de novo)
+        recomeca = (etapa, est) == ("transcrever", "inicio")
+        if item and (recomeca or ETAPAS.index(etapa) >= ETAPAS.index(atual.get(item, etapa))):
+            atual.pop(item, None)  # reinsere: ordem = chegada na etapa
+            atual[item] = etapa
         if est == "inicio":
             aberto[etapa].pop(item, None)
             aberto[etapa][item] = None
@@ -102,7 +107,8 @@ def estado(evs: list[dict], vivo: bool, cortes: list[dict]) -> dict:
     for p in PLATAFORMAS:
         arestas[f"aprovacao-{p}"] = len(nos[p]["itens"])
 
-    feed = [{"t": e.get("t"), "etapa": e.get("etapa"), "msg": e.get("msg", ""), "estado": e.get("estado")} for e in reversed(evs[-50:])]
+    marcos = [e for e in evs if e.get("estado") != "progresso"]  # progresso inundaria as 50 linhas
+    feed = [{"t": e.get("t"), "etapa": e.get("etapa"), "msg": e.get("msg", ""), "estado": e.get("estado")} for e in reversed(marcos[-50:])]
     return {"nos": nos, "arestas": arestas, "feed": feed}
 
 

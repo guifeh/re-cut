@@ -327,3 +327,16 @@ def test_baixar_usa_o_mesmo_item(monkeypatch, tmp_path, capsys):
     evs = _eventos(capsys.readouterr().out)
     assert [e["estado"] for e in evs] == ["inicio", "progresso", "fim"]
     assert {e["item"] for e in evs} == {"fonte"}
+
+
+def test_processar_marca_ranking_depois_de_renderizar(monkeypatch, tmp_path, capsys):
+    import recut
+    monkeypatch.setattr(recut, "transcrever", lambda v: ([(0, 30, "oi")], [[0, 1, "oi"]]))
+    monkeypatch.setattr(recut, "rms_por_segundo", lambda v: [1.0] * 60)
+    monkeypatch.setattr(recut, "escolher_cortes", lambda *a: [])
+    monkeypatch.setattr(recut, "aplicar_regra", lambda *a: [{"inicio": 0, "fim": 20, "nota": 8, "titulo": "t"}])
+    monkeypatch.setattr(recut, "renderizar", lambda *a: None)
+    cfg = {"nota_min": 6, "dur_min": 15, "dur_max": 90, "limite": 10, "template": {"nome": "p", "velocidade": 1}}
+    recut.processar(tmp_path / "lote_0000.ts", tmp_path, "lote_0000", cfg)
+    passos = [(e["etapa"], e["estado"]) for e in _eventos(capsys.readouterr().out)]
+    assert passos[-3:] == [("renderizar", "progresso"), ("renderizar", "fim"), ("ranking", "fim")]

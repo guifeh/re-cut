@@ -33,9 +33,33 @@ def test_erro_fim_e_ocioso():
 
 
 def test_feed_mais_recente_primeiro_e_limitado():
-    evs = [ev("ia", "progresso", f"i{n}", msg=str(n)) for n in range(60)]
+    evs = [ev("ia", "fim", f"i{n}", msg=str(n)) for n in range(60)]
     feed = estado(evs, vivo=True, cortes=[])["feed"]
-    assert len(feed) == 50 and feed[0] == {"t": ANY, "etapa": "ia", "msg": "59", "estado": "progresso"}
+    assert len(feed) == 50 and feed[0] == {"t": ANY, "etapa": "ia", "msg": "59", "estado": "fim"}
+
+
+def test_feed_sem_progresso():
+    evs = [ev("ia", "inicio", msg="a")] + [ev("ia", "progresso", msg="p", progresso=0.5)] * 60
+    assert [f["msg"] for f in estado(evs, vivo=True, cortes=[])["feed"]] == ["a"]
+
+
+def test_live_lotes_terminam_em_ranking_sem_cartao_vazio():
+    """Sequência que o recut.py emite numa live: entrada sem item, cada lote passa pelas etapas e termina com o
+    progresso da entrada (também sem item)."""
+    evs = [ev("entrada", "fim", "", msg="Entrada: canal")]
+    for lote in ("lote_0000", "lote_0001"):
+        evs += [ev("transcrever", "inicio", lote), ev("transcrever", "fim", lote), ev("ia", "inicio", lote),
+                ev("ia", "fim", lote), ev("renderizar", "inicio", lote), ev("renderizar", "fim", lote),
+                ev("ranking", "fim", lote), ev("entrada", "progresso", "", n=1)]
+    nos = estado(evs, vivo=True, cortes=[])["nos"]
+    assert nos["ranking"]["itens"] == ["lote_0000", "lote_0001"]
+    assert all("" not in n["itens"] for n in nos.values()) and nos["entrada"]["itens"] == []
+    assert nos["entrada"]["estado"] == "ok" and nos["ranking"]["estado"] == "ok"
+
+
+def test_cartao_nao_volta_de_etapa_em_log_antigo():
+    evs = [ev("ranking", "fim", "v"), ev("renderizar", "inicio", "v"), ev("renderizar", "fim", "v")]
+    assert estado(evs, vivo=False, cortes=[])["nos"]["ranking"]["itens"] == ["v"]
 
 
 def test_aprovacao_espera_e_ordena_por_nota():
@@ -86,3 +110,8 @@ def test_corte_malformado_nao_quebra():
     cortes = [{"nome": "c", "nota": None}, {"nome": "d", "nota": 3, "publicacao": None}]
     nos = estado([], vivo=False, cortes=cortes)["nos"]
     assert nos["aprovacao"]["itens"] == ["d", "c"] and nos["youtube"]["estado"] == "ocioso"
+
+
+def test_lote_repetido_em_outra_transmissao_recomeca():
+    evs = [ev("transcrever", "inicio", "lote_0000"), ev("ranking", "fim", "lote_0000"), ev("transcrever", "inicio", "lote_0000")]
+    assert estado(evs, vivo=True, cortes=[])["nos"]["transcrever"]["itens"] == ["lote_0000"]
