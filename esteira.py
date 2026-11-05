@@ -6,6 +6,7 @@ import contas
 from recut import ETAPAS, PREFIXO_EVENTO
 
 PLATAFORMAS = contas.PLATAFORMAS + ("tiktok",)  # TikTok é manual: sem conta, o link é colado
+NOMES = {"youtube": "YouTube", "instagram": "Instagram", "tiktok": "TikTok"}
 NOS = ETAPAS + ("aprovacao",) + PLATAFORMAS
 
 
@@ -108,9 +109,30 @@ def estado(evs: list[dict], vivo: bool, cortes: list[dict]) -> dict:
     for p in PLATAFORMAS:
         arestas[f"aprovacao-{p}"] = len(nos[p]["itens"])
 
-    marcos = [e for e in evs if e.get("estado") != "progresso"]  # progresso inundaria as 50 linhas
-    feed = [{"t": e.get("t"), "etapa": e.get("etapa"), "msg": e.get("msg", ""), "estado": e.get("estado")} for e in reversed(marcos[-50:])]
-    return {"nos": nos, "arestas": arestas, "feed": feed}
+    marcos = [{"t": e.get("t"), "etapa": e.get("etapa"), "msg": e.get("msg", ""), "estado": e.get("estado")}
+              for e in evs if e.get("estado") != "progresso"]  # progresso inundaria as 50 linhas
+    feed = sorted(marcos + _feed_publicacao(aprovados), key=lambda f: f["t"] or "")  # estável: empate fica na ordem do log
+    return {"nos": nos, "arestas": arestas, "feed": feed[-50:][::-1]}
+
+
+def _feed_publicacao(aprovados):
+    """Uma linha por aprovação e pelo estado atual de cada plataforma (o arquivo guarda só a última mudança)."""
+    linhas = []
+    for c in aprovados:
+        pub, nome = c["publicacao"], c.get("titulo") or c["nome"]
+        linhas.append({"t": pub["aprovado_em"], "etapa": "aprovacao", "msg": f"Corte {nome} aprovado", "estado": "fim"})
+        for p, x in (pub.get("plataformas") or {}).items():
+            est = (x or {}).get("estado")
+            if not (x or {}).get("em"):
+                continue
+            if est == "ok":
+                msg = "Link do TikTok salvo" if p == "tiktok" else f"Postado no {NOMES.get(p, p)}"
+            elif est in ("erro", "incerto"):
+                msg = x.get("erro") or est
+            else:
+                continue
+            linhas.append({"t": x["em"], "etapa": p, "msg": f"{msg} · {nome}", "estado": "fim" if est == "ok" else "erro"})
+    return linhas
 
 
 def resumo_do_dia(cortes: list[dict], hoje: date) -> dict:

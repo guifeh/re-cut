@@ -115,3 +115,31 @@ def test_corte_malformado_nao_quebra():
 def test_lote_repetido_em_outra_transmissao_recomeca():
     evs = [ev("transcrever", "inicio", "lote_0000"), ev("ranking", "fim", "lote_0000"), ev("transcrever", "inicio", "lote_0000")]
     assert estado(evs, vivo=True, cortes=[])["nos"]["transcrever"]["itens"] == ["lote_0000"]
+
+
+def test_feed_mostra_aprovacao_e_publicacao_na_ordem():
+    pub = {"aprovado_em": "2026-11-04T10:01:00", "plataformas": {
+        "youtube": {"estado": "ok", "em": "2026-11-04T10:03:00"},
+        "instagram": {"estado": "incerto", "erro": "caiu", "em": "2026-11-04T10:02:00"},
+        "tiktok": {"estado": "manual", "em": "2026-11-04T10:01:00"}}}
+    pub2 = {"aprovado_em": "2026-11-04T10:04:00", "plataformas": {"tiktok": {"estado": "ok", "em": "2026-11-04T10:05:00"}, "youtube": {"estado": "ok"}}}
+    cortes = [{"nome": "c", "titulo": "Gol", "nota": 8, "publicacao": pub}, {"nome": "d", "nota": 7, "publicacao": pub2},
+              {"nome": "e", "nota": 6, "publicacao": {}}]
+    evs = [{"etapa": "ranking", "estado": "fim", "item": "x", "t": "2026-11-04T10:00:00", "msg": "pronto"},
+           {"etapa": "ia", "estado": "progresso", "item": "x", "t": "2026-11-04T10:06:00"}]
+    feed = estado(evs, vivo=False, cortes=cortes)["feed"]
+    assert [(f["etapa"], f["msg"], f["estado"]) for f in feed] == [
+        ("tiktok", "Link do TikTok salvo · d", "fim"),
+        ("aprovacao", "Corte d aprovado", "fim"),
+        ("youtube", "Postado no YouTube · Gol", "fim"),
+        ("instagram", "caiu · Gol", "erro"),
+        ("aprovacao", "Corte Gol aprovado", "fim"),
+        ("ranking", "pronto", "fim"),
+    ]
+
+
+def test_feed_com_publicacao_continua_limitado_a_50():
+    pub = {"aprovado_em": "2026-11-04T23:00:00", "plataformas": {"youtube": {"estado": "ok", "em": "2026-11-04T23:01:00"}}}
+    evs = [ev("ia", "fim", str(i)) for i in range(60)]
+    feed = estado(evs, vivo=False, cortes=[{"nome": "c", "nota": 1, "publicacao": pub}])["feed"]
+    assert len(feed) == 50 and feed[0]["etapa"] == "youtube"
