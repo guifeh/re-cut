@@ -18,8 +18,9 @@ plataforma, só para as suas próprias contas. É grátis e feito uma vez só.
 **TikTok fica manual, sem app** (decisão de 2026-11-04): app não auditado do TikTok só posta em privado e exige a
 conta inteira privada na hora do envio ("All user accounts using the API client to post must be set to private at
 the time of posting" — https://developers.tiktok.com/doc/content-sharing-guidelines), e a revisão recusa ferramenta
-para postar nas próprias contas. No TikTok, o re-cut entrega o vídeo (QR code para o celular) e a legenda pronta
-para copiar; você posta no app e cola o link de volta.
+para postar nas próprias contas. No TikTok, o painel do corte aprovado tem "Baixar vídeo" e
+"Copiar legenda" (com as hashtags); você posta no app e cola o link de volta em "Colar link do TikTok". QR code para o
+celular ainda não existe.
 
 **Ordem recomendada:** 1) site no GitHub Pages (só para o login do Instagram), 2) Instagram, 3) YouTube.
 
