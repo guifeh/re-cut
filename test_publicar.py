@@ -1,0 +1,269 @@
+import json
+
+import pytest
+
+import contas
+from publicar import aprovar, colar_link, enviar, ler_publicacao, tentar_de_novo, texto_final
+
+TOKEN = "TOKEN-SECRETO"
+
+
+class Falso:
+    """http falso: registra cada chamada e devolve as respostas prontas em ordem; (status, obj, cabeçalhos)."""
+    def __init__(self, *respostas):
+        self.respostas, self.chamadas = list(respostas), []
+
+    def __call__(self, metodo, url, dados=None, cabecalhos=None, corpo=None, timeout=60):
+        self.chamadas.append({"metodo": metodo, "url": url, "dados": dados, "cab": cabecalhos or {}, "corpo": corpo})
+        status, obj, *cab = self.respostas.pop(0)
+        return status, (cab[0] if cab else {}), json.dumps(obj).encode()
+
+
+@pytest.fixture
+def corte(tmp_path):
+    job = tmp_path / "jobs" / "j1"
+    job.mkdir(parents=True)
+    (job / "fonte_corte01.mp4").write_bytes(b"v" * 1234)
+    arq = job / "fonte_corte01.json"
+    arq.write_text(json.dumps({"arquivo": "fonte_corte01.mp4", "titulo": "t", "legendas": ["a", "b", "c"]}))
+    return arq
+
+
+@pytest.fixture
+def pasta(tmp_path):
+    p = tmp_path / "contas"
+    contas.salvar("youtube", {"access_token": TOKEN, "vence_em": "2999-01-01T00:00:00"}, p)
+    contas.salvar("instagram", {"access_token": TOKEN, "vence_em": "2999-01-01T00:00:00", "user_id": "42"}, p)
+    return p
+
+
+def estados(corte_json):
+    return {p: e["estado"] for p, e in ler_publicacao(corte_json, {(str(corte_json.resolve()), p) for p in
+                                                                    ("youtube", "instagram")})["plataformas"].items()}
+
+
+def youtube_ok(id_video="abc"):
+    return [(200, {}, {"Location": "https://upload.example/sessao"}), (200, {"id": id_video})]
+
+
+def test_aprovar_duas_vezes_nao_duplica(corte):
+    assert aprovar(corte, "minha legenda", ["#a"]) == ["youtube", "instagram"]
+    with pytest.raises(ValueError, match="já foi aprovado"):
+        aprovar(corte, "outra", [])
+    pub = json.loads(corte.with_suffix(".publicacao").read_text(encoding="utf-8"))
+    assert pub["legenda"] == "minha legenda" and pub["aprovado_em"]
+    assert estados(corte) == {"youtube": "enviando", "instagram": "enviando", "tiktok": "manual"}
+
+
+def test_ler_sem_arquivo_e_vazio(corte):
+    assert ler_publicacao(corte, set()) == {}
+
+
+def test_enviando_sem_thread_vira_incerto(corte):
+    aprovar(corte, "x", [])
+    ativos = {(str(corte.resolve()), "youtube"), (str(corte.resolve()), "instagram")}
+    assert ler_publicacao(corte, ativos)["plataformas"]["youtube"]["estado"] == "enviando"
+    assert ler_publicacao(corte, set())["plataformas"]["youtube"]["estado"] == "incerto"
+    assert ler_publicacao(corte, ativos)["plataformas"]["youtube"]["estado"] == "incerto"  # regravado
+
+
+def test_incerto_so_reenvia_forcando(corte):
+    aprovar(corte, "x", [])
+    ler_publicacao(corte, set())
+    with pytest.raises(ValueError):
+        tentar_de_novo(corte, "youtube", forcar=False)
+    tentar_de_novo(corte, "youtube", forcar=True)
+    assert ler_publicacao(corte, {(str(corte.resolve()), "youtube")})["plataformas"]["youtube"]["estado"] == "enviando"
+
+
+def test_ok_nunca_reenvia(corte, pasta):
+    aprovar(corte, "x", [])
+    enviar(corte, "youtube", http=Falso(*youtube_ok()), pasta_contas=pasta)
+    for forcar in (False, True):
+        with pytest.raises(ValueError, match="já foi postado"):
+            tentar_de_novo(corte, "youtube", forcar=forcar)
+    with pytest.raises(ValueError):  # e enviar de novo direto também não
+        enviar(corte, "youtube", http=Falso(*youtube_ok()), pasta_contas=pasta)
+
+
+def test_erro_volta_para_enviando(corte, pasta):
+    aprovar(corte, "x", [])
+    enviar(corte, "youtube", http=Falso((500, {"error": "x"})), pasta_contas=pasta)
+    assert estados(corte)["youtube"] == "erro"
+    tentar_de_novo(corte, "youtube", forcar=False)
+    assert estados(corte)["youtube"] == "enviando"
+
+
+def test_youtube_envia_publico_e_devolve_link_do_short(corte, pasta):
+    aprovar(corte, "L" * 150, ["shorts"])
+    http = Falso(*youtube_ok("vid9"))
+    r = enviar(corte, "youtube", http=http, pasta_contas=pasta)
+    assert r["estado"] == "ok" and r["link"] == "https://youtube.com/shorts/vid9"
+    inicio, envio = http.chamadas
+    assert inicio["url"].startswith("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable")
+    assert inicio["dados"]["snippet"]["title"] == "L" * 100
+    assert inicio["dados"]["snippet"]["description"] == "L" * 150 + "\n\n#shorts"
+    assert inicio["dados"]["status"] == {"privacyStatus": "public", "selfDeclaredMadeForKids": False}
+    assert inicio["cab"]["Authorization"] == f"Bearer {TOKEN}"
+    assert envio["metodo"] == "PUT" and envio["url"] == "https://upload.example/sessao"
+    assert envio["cab"]["Content-Length"] == "1234" and hasattr(envio["corpo"], "read")  # em blocos, não na memória
+    assert estados(corte)["youtube"] == "ok"
+
+
+def test_queda_no_envio_do_video_fica_incerto(corte, pasta):
+    aprovar(corte, "x", [])
+
+    def cai(metodo, url, **kw):
+        if metodo == "PUT":
+            raise OSError("conexão caiu")
+        return 200, {"Location": "https://upload.example/sessao"}, b"{}"
+    r = enviar(corte, "youtube", http=cai, pasta_contas=pasta)
+    assert r["estado"] == "incerto"  # pode ter saído: só reenvia forçando
+
+
+def instagram(*status, publicar=(200, {"id": "m1"})):
+    return [(200, {"id": "c1"}), (200, {"success": True}),
+            *[(200, {"status_code": s}) for s in status], publicar,
+            (200, {"permalink": "https://www.instagram.com/reel/XYZ/"})]
+
+
+def test_instagram_espera_container_e_pega_permalink(corte, pasta):
+    aprovar(corte, "legenda", ["a"])
+    esperas = []
+    http = Falso(*instagram("IN_PROGRESS", "IN_PROGRESS", "FINISHED"))
+    r = enviar(corte, "instagram", http=http, esperar=esperas.append, pasta_contas=pasta)
+    assert r["estado"] == "ok" and r["link"] == "https://www.instagram.com/reel/XYZ/" and r["container"] == "c1"
+    assert esperas == [30, 30]
+    criar, upload, *_, publicar, link = http.chamadas
+    assert criar["url"] == "https://graph.instagram.com/v26.0/42/media"
+    assert criar["dados"]["media_type"] == "REELS" and criar["dados"]["upload_type"] == "resumable"
+    assert criar["dados"]["caption"] == "legenda\n\n#a"
+    assert upload["url"] == "https://rupload.facebook.com/ig-api-upload/v26.0/c1"
+    assert upload["cab"]["Authorization"] == f"OAuth {TOKEN}" and upload["cab"]["offset"] == "0"
+    assert upload["cab"]["file_size"] == "1234" and hasattr(upload["corpo"], "read")
+    assert publicar["url"] == "https://graph.instagram.com/v26.0/42/media_publish"
+    assert publicar["dados"]["creation_id"] == "c1"
+    assert link["url"].startswith("https://graph.instagram.com/v26.0/m1?fields=permalink")
+
+
+def test_instagram_container_com_erro_marca_erro(corte, pasta):
+    aprovar(corte, "x", [])
+    http = Falso(*instagram("IN_PROGRESS", "ERROR")[:4])
+    r = enviar(corte, "instagram", http=http, esperar=lambda s: None, pasta_contas=pasta)
+    assert r["estado"] == "erro" and "ERROR" in r["erro"] and r["container"] == "c1"
+    assert not any("media_publish" in c["url"] for c in http.chamadas)
+
+
+def test_instagram_reenvio_nao_republica_container_ja_publicado(corte, pasta):
+    aprovar(corte, "x", [])
+    enviar(corte, "instagram", http=Falso(*instagram("ERROR")[:3]), esperar=lambda s: None, pasta_contas=pasta)
+    tentar_de_novo(corte, "instagram", forcar=False)
+    http = Falso((200, {"status_code": "PUBLISHED"}))
+    r = enviar(corte, "instagram", http=http, esperar=lambda s: None, pasta_contas=pasta)
+    assert r["estado"] == "erro" and "cole o link" in r["erro"] and len(http.chamadas) == 1
+
+
+def test_conta_ausente_erra_so_ela(corte, pasta):
+    (pasta / "instagram.json").unlink()
+    aprovar(corte, "x", [])
+    r = enviar(corte, "instagram", http=Falso(), pasta_contas=pasta)
+    assert r["estado"] == "erro" and "aba Contas" in r["erro"]
+    assert enviar(corte, "youtube", http=Falso(*youtube_ok()), pasta_contas=pasta)["estado"] == "ok"
+    assert estados(corte) == {"youtube": "ok", "instagram": "erro", "tiktok": "manual"}
+
+
+def test_erro_da_plataforma_nao_vaza_token(corte, pasta):
+    aprovar(corte, "x", [])
+    r = enviar(corte, "youtube", http=Falso((400, {"msg": f"token {TOKEN} inválido"})), pasta_contas=pasta)
+    assert r["estado"] == "erro" and TOKEN not in r["erro"]
+    assert TOKEN not in corte.with_suffix(".publicacao").read_text(encoding="utf-8")
+
+
+def test_texto_final_limita_hashtags():
+    assert texto_final("oi", ["#a", "b"]) == "oi\n\n#a #b"
+    assert texto_final("oi", [f"t{i}" for i in range(40)]).count("#") == 30
+    assert texto_final("oi", []) == "oi"
+    assert len(texto_final("x" * 3000, ["a"])) == 2200 and texto_final("x" * 3000, ["a"]).endswith("\n\n#a")
+
+
+def test_colar_link_valida_dominio(corte):
+    aprovar(corte, "x", [])
+    for ruim in ("https://evil.com/x", "http://www.tiktok.com/@x/video/1", "https://tiktok.com.evil.com/x"):
+        with pytest.raises(ValueError):
+            colar_link(corte, "tiktok", ruim)
+    with pytest.raises(ValueError):  # youtube está enviando: não aceita link agora
+        colar_link(corte, "youtube", "https://youtu.be/abc")
+    colar_link(corte, "tiktok", "https://www.tiktok.com/@x/video/1")
+    t = ler_publicacao(corte, set())["plataformas"]["tiktok"]
+    assert t["estado"] == "ok" and t["link"] == "https://www.tiktok.com/@x/video/1"
+    colar_link(corte, "youtube", "https://youtu.be/abc")  # incerto agora: aceita
+
+
+def test_5xx_no_put_do_youtube_fica_incerto(corte, pasta):
+    aprovar(corte, "x", [])
+    r = enviar(corte, "youtube", http=Falso(youtube_ok()[0], (503, {"error": "x"})), pasta_contas=pasta)
+    assert r["estado"] == "incerto"
+    with pytest.raises(ValueError):
+        tentar_de_novo(corte, "youtube", forcar=False)
+
+
+def test_4xx_no_put_do_youtube_e_erro(corte, pasta):
+    aprovar(corte, "x", [])
+    assert enviar(corte, "youtube", http=Falso(youtube_ok()[0], (400, {})), pasta_contas=pasta)["estado"] == "erro"
+
+
+def test_publicacao_some_no_meio_do_envio_nao_levanta(corte, pasta):
+    aprovar(corte, "x", [])
+
+    def lixeira_no_meio(metodo, url, **kw):
+        corte.with_suffix(".publicacao").unlink(missing_ok=True)
+        raise OSError("caiu")
+    r = enviar(corte, "youtube", http=lixeira_no_meio, pasta_contas=pasta)
+    assert r["estado"] == "erro" and not corte.with_suffix(".publicacao").exists()  # não recria o arquivo
+
+
+@pytest.mark.parametrize("publicar", [OSError("caiu"), (200, {})])
+def test_media_publish_sem_resposta_fica_incerto(corte, pasta, publicar):
+    aprovar(corte, "x", [])
+    falso = Falso(*instagram("FINISHED")[:3], (200, {}))
+
+    def http(metodo, url, **kw):
+        if "media_publish" in url:
+            if isinstance(publicar, Exception):
+                raise publicar
+            falso.respostas.insert(0, publicar)
+        return falso(metodo, url, **kw)
+    r = enviar(corte, "instagram", http=http, esperar=lambda s: None, pasta_contas=pasta)
+    assert r["estado"] == "incerto"
+
+
+def test_permalink_falhando_depois_do_publish_fica_ok_sem_link(corte, pasta):
+    aprovar(corte, "x", [])
+    http = Falso(*instagram("FINISHED")[:-1], (500, {}))
+    r = enviar(corte, "instagram", http=http, esperar=lambda s: None, pasta_contas=pasta)
+    assert r["estado"] == "ok" and r["link"] is None
+
+
+def test_ok_sem_link_aceita_colar_link_uma_vez(corte, pasta):
+    aprovar(corte, "x", [])
+    enviar(corte, "instagram", http=Falso(*instagram("FINISHED")[:-1], (500, {})), esperar=lambda s: None, pasta_contas=pasta)
+    colar_link(corte, "instagram", "https://www.instagram.com/reel/abc/")
+    assert ler_publicacao(corte, set())["plataformas"]["instagram"]["link"] == "https://www.instagram.com/reel/abc/"
+    with pytest.raises(ValueError, match="não espera link"):  # ok com link: não troca
+        colar_link(corte, "instagram", "https://www.instagram.com/reel/outro/")
+
+
+def test_youtube_tira_sinais_de_menor_e_maior(corte, pasta):
+    aprovar(corte, "<3 o melhor > tudo", ["a"])
+    http = Falso(*youtube_ok())
+    enviar(corte, "youtube", http=http, pasta_contas=pasta)
+    snippet = http.chamadas[0]["dados"]["snippet"]
+    assert snippet["title"] == "3 o melhor  tudo" and "<" not in snippet["description"] and ">" not in snippet["description"]
+
+
+def test_plataforma_sem_estado_conta_como_ausente(corte):
+    corte.with_suffix(".publicacao").write_text(json.dumps(
+        {"aprovado_em": "2026-11-04T10:00:00", "plataformas": {"youtube": {"link": None}, "tiktok": {"estado": "manual"}}}))
+    assert list(ler_publicacao(corte, set())["plataformas"]) == ["tiktok"]
+    with pytest.raises(ValueError):
+        tentar_de_novo(corte, "youtube", False)

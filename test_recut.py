@@ -1,11 +1,14 @@
 import datetime as dt
+import json
+import sys
+import types
 from pathlib import Path
 
 import pytest
 
 from recut import (agentes_disponiveis, agrupar_palavras, aplicar_regra, carregar_estrategia, carregar_template,
                    comandos_crop, cor_ass, energia_relativa, extrair_json, filtro_video, legenda_ass, no_horario,
-                   normalizar_template, recorte_vertical, slug, suavizar_trajetoria, ts_ass)
+                   baixar, limpar_legendas, marcar, marcar_erro, normalizar_template, PREFIXO_EVENTO, recorte_vertical, slug, suavizar_trajetoria, ts_ass)
 
 
 def test_ts_ass():
@@ -276,3 +279,64 @@ def test_emoji_vira_figurinha_na_legenda():
     plano = [(4.0, "emoji", {"emoji": "😂"}), (8.0, "zoom", {"emoji": "🔥"})]
     linhas = [l for l in legenda_ass([], 10, 30, tpl, "", plano).splitlines() if ",Emoji," in l]
     assert len(linhas) == 1 and linhas[0].startswith("Dialogue: 2,0:00:04.00,0:00:05.30,Emoji") and linhas[0].endswith("😂")
+
+
+def test_marcar_emite_linha_json(capsys):
+    marcar("transcrever", "progresso", "lote_0003", progresso=0.62, msg="Transcrevendo lote 3")
+    linha = capsys.readouterr().out.strip()
+    assert linha.startswith(PREFIXO_EVENTO)
+    ev = json.loads(linha[len(PREFIXO_EVENTO):])
+    assert ev["etapa"] == "transcrever" and ev["estado"] == "progresso" and ev["item"] == "lote_0003"
+    assert ev["progresso"] == 0.62 and "t" in ev
+
+
+def test_legendas_completa_e_corta():
+    assert limpar_legendas({"legendas": ["a", "", "b", "c"], "descricao": "d", "titulo": "t"}) == ["a", "b", "c"]
+    assert limpar_legendas({"descricao": "d", "titulo": "t"}) == ["d", "t", "t"]
+    assert len(limpar_legendas({"legendas": ["x" * 3000], "descricao": "d", "titulo": "t"})[0]) == 2200
+
+
+def _eventos(out):
+    return [json.loads(l[len(PREFIXO_EVENTO):]) for l in out.splitlines() if l.startswith(PREFIXO_EVENTO)]
+
+
+def test_erro_fecha_o_item_aberto(capsys):
+    marcar("transcrever", "inicio", "x")
+    marcar_erro(RuntimeError("falhou"))
+    ev = _eventos(capsys.readouterr().out)[-1]
+    assert (ev["etapa"], ev["estado"], ev["item"], ev["msg"]) == ("transcrever", "erro", "x", "falhou")
+
+
+def test_baixar_usa_o_mesmo_item(monkeypatch, tmp_path, capsys):
+    class YDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def extract_info(self, url):
+            self.opts["progress_hooks"][0]({"status": "downloading", "downloaded_bytes": 50, "total_bytes": 100})
+            return {"requested_downloads": [{"filepath": str(tmp_path / "fonte.mp4")}]}
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=YDL))
+    baixar("http://x", tmp_path)
+    evs = _eventos(capsys.readouterr().out)
+    assert [e["estado"] for e in evs] == ["inicio", "progresso", "fim"]
+    assert {e["item"] for e in evs} == {"fonte"}
+
+
+def test_processar_marca_ranking_depois_de_renderizar(monkeypatch, tmp_path, capsys):
+    import recut
+    monkeypatch.setattr(recut, "transcrever", lambda v: ([(0, 30, "oi")], [[0, 1, "oi"]]))
+    monkeypatch.setattr(recut, "rms_por_segundo", lambda v: [1.0] * 60)
+    monkeypatch.setattr(recut, "escolher_cortes", lambda *a: [])
+    monkeypatch.setattr(recut, "aplicar_regra", lambda *a: [{"inicio": 0, "fim": 20, "nota": 8, "titulo": "t"}])
+    monkeypatch.setattr(recut, "renderizar", lambda *a: None)
+    cfg = {"nota_min": 6, "dur_min": 15, "dur_max": 90, "limite": 10, "template": {"nome": "p", "velocidade": 1}}
+    recut.processar(tmp_path / "lote_0000.ts", tmp_path, "lote_0000", cfg)
+    passos = [(e["etapa"], e["estado"]) for e in _eventos(capsys.readouterr().out)]
+    assert passos[-3:] == [("renderizar", "progresso"), ("renderizar", "fim"), ("ranking", "fim")]

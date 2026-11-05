@@ -309,3 +309,12 @@ def test_item_editado_a_mao_nao_derruba_a_lista(ambiente):
     del dados["excluido_em"]
     caminho.write_text(json.dumps(dados))
     assert [i["id"] for i in lx.listar()] == [item["id"]]
+
+
+def test_publicacao_vai_junto_para_a_lixeira(ambiente):
+    lx, job, _ = ambiente
+    (job / "fonte_corte01.publicacao").write_text("{}")
+    item = lx.excluir_corte(job / "fonte_corte01.json")
+    assert not (job / "fonte_corte01.publicacao").exists() and "fonte_corte01.publicacao" in item["arquivos"]
+    lx.restaurar(item["id"])
+    assert (job / "fonte_corte01.publicacao").exists()

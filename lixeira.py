@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 
 RETENCAO_DIAS = int(os.getenv("RECUT_LIXEIRA_DIAS", "30"))
-EXTENSOES_CORTE = (".mp4", ".jpg", ".json", ".ass", ".cmd")  # tudo que renderizar() gera para um corte
+EXTENSOES_CORTE = (".mp4", ".jpg", ".json", ".ass", ".cmd", ".publicacao")  # renderizar() + estado de publicação
 APAGANDO = ".apagando-"  # pasta renomeada antes do rmtree; sobra só se algum arquivo estava aberto
 IDADE_FANTASMA = dt.timedelta(minutes=1)  # item recém-gravado pode estar no meio de uma exclusão: não é fantasma
 
@@ -106,7 +106,7 @@ class Lixeira:
             return item
 
     def excluir_corte(self, arquivo_json):
-        """Move os arquivos de um corte (.mp4, .jpg, .json, .ass, .cmd) para a lixeira."""
+        """Move os arquivos de um corte (EXTENSOES_CORTE) para a lixeira."""
         with self.lock:
             arquivo_json = Path(arquivo_json)
             job_dir = self._job_do_arquivo(arquivo_json)
