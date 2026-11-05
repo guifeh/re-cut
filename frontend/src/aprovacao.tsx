@@ -256,6 +256,8 @@ function LinhaPlataforma({ job, corte: c, plataforma: p, estado: e, texto, onMud
               <RotateCcw className="size-3" /> Tentar de novo
             </Button>
           )}
+          {/* ex.: o reenvio achou o Reel já publicado; o servidor aceita link em erro */}
+          <ColarLink plataforma={p} ocupado={ocupado} onSalvar={(l) => acao('link', l)} />
         </>
       )}
 
@@ -282,7 +284,7 @@ function LinhaPlataforma({ job, corte: c, plataforma: p, estado: e, texto, onMud
       {e.estado === 'manual' && (
         <>
           <div className="flex flex-wrap gap-1.5">
-            <Button variant="outline" size="sm" render={<a href={c.video_url} download={`${c.nome}.mp4`} />} nativeButton={false}>
+            <Button variant="outline" size="sm" render={<a href={c.video_url} download={c.arquivo} />} nativeButton={false}>
               <Download className="size-3" /> Baixar vídeo
             </Button>
             <Button variant="outline" size="sm" onClick={() => copiar(texto, 'Legenda')}><Copy className="size-3" /> Copiar legenda</Button>

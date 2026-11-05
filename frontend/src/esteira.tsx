@@ -6,7 +6,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import {
-  AudioLines, Camera, Check, Clapperboard, Download, Inbox, MonitorPlay, RotateCcw, Smartphone, Sparkles, Trophy, UserCheck, X,
+  AudioLines, Camera, Check, Clapperboard, Download, Inbox, MonitorPlay, RotateCcw, Smartphone, Sparkles, Trophy, UserCheck, WifiOff, X,
   type LucideIcon,
 } from 'lucide-react'
 import { api, nomeEntrada, type Corte, type Esteira as DadosEsteira, type EstadoNo, type IdNo, type Job, type NoEsteira, type Plataforma, type ResumoDoDia } from '@/api'
@@ -29,8 +29,11 @@ const NO: Record<IdNo, { rotulo: string; Icone: LucideIcon }> = {
   instagram: { rotulo: 'Instagram Reels', Icone: Camera },
   tiktok: { rotulo: 'TikTok', Icone: Smartphone },
 }
-const ESTADO: Record<EstadoNo, string> = { ocioso: 'parado', rodando: 'rodando', ok: 'concluído', erro: 'erro', esperando: 'esperando você' }
-const BORDA: Record<EstadoNo, string> = {
+// 'sem-sinal': o nó estava rodando mas o servidor não responde; não anima um processo que pode ter parado
+type EstadoVisto = EstadoNo | 'sem-sinal'
+const ESTADO: Record<EstadoVisto, string> = { ocioso: 'parado', rodando: 'rodando', ok: 'concluído', erro: 'erro', esperando: 'esperando você', 'sem-sinal': 'sem notícia do servidor' }
+const BORDA: Record<EstadoVisto, string> = {
+  'sem-sinal': 'border-[1.5px] border-dashed border-foreground/40',
   ocioso: 'border-[1.5px] border-foreground/25',
   rodando: 'border-[1.5px] border-transparent',
   ok: 'border-2 border-emerald-500',
@@ -44,7 +47,7 @@ const MAX_CARTOES = 3 // por nó; o resto vira um cartão "+N"
 const ESCURO = document.documentElement.classList.contains('dark')
 const temProperty = typeof CSS !== 'undefined' && 'registerProperty' in CSS
 
-type DadosNo = { no: IdNo; estado: EstadoNo; progresso: number | null; msg: string }
+type DadosNo = { no: IdNo; estado: EstadoVisto; progresso: number | null; msg: string }
 type DadosCartao = { no: IdNo; texto: string }
 type DadosLigacao = { n: number; ok: boolean }
 type NoFluxo = Node<DadosNo, 'no'>
@@ -57,12 +60,13 @@ export function useEsteira(jobId: string | null) {
   const [dados, setDados] = useState<{ job: Job; esteira: DadosEsteira } | null>(null)
   const [resumo, setResumo] = useState<ResumoDoDia | null>(null)
   const [tick, setTick] = useState(0)
+  const [offline, setOffline] = useState(false) // última busca da esteira falhou
   useEffect(() => {
     if (!jobId) return
     let vivo = true // resposta atrasada de outro job não sobrescreve a do job atual
     let t: ReturnType<typeof setInterval> | undefined
     const buscar = () => {
-      api.esteira(jobId).then((d) => vivo && setDados(d)).catch(() => {})
+      api.esteira(jobId).then((d) => { if (vivo) { setDados(d); setOffline(false) } }).catch(() => vivo && setOffline(true))
       api.resumoDoDia().then((r) => vivo && setResumo(r)).catch(() => {})
     }
     const ligar = () => {
@@ -79,7 +83,7 @@ export function useEsteira(jobId: string | null) {
       document.removeEventListener('visibilitychange', ligar)
     }
   }, [jobId, tick])
-  return { dados: dados?.job.id === jobId ? dados : null, resumo, atualizar: () => setTick((n) => n + 1) }
+  return { dados: dados?.job.id === jobId ? dados : null, resumo, offline, atualizar: () => setTick((n) => n + 1) }
 }
 
 function NoEtapa({ data }: NodeProps<NoFluxo>) {
@@ -148,12 +152,12 @@ const posicao = (no: IdNo) => {
   return i >= 0 ? { x: i * PASSO, y: 0 } : { x: ETAPAS.length * PASSO, y: (PLATAFORMAS.indexOf(no as Plataforma) - 1) * 180 }
 }
 
-function montar(e: DadosEsteira, cortes: Corte[]) {
+function montar(e: DadosEsteira, cortes: Corte[], offline: boolean) {
   const porNome = new Map(cortes.map((c) => [c.nome, c]))
   const nos: (NoFluxo | CartaoFluxo)[] = []
   for (const [id, no] of Object.entries(e.nos) as [IdNo, NoEsteira][]) {
     const p = posicao(id)
-    nos.push({ id, type: 'no', position: p, data: { no: id, estado: no.estado, progresso: no.progresso, msg: no.msg } })
+    nos.push({ id, type: 'no', position: p, data: { no: id, estado: offline && no.estado === 'rodando' ? 'sem-sinal' : no.estado, progresso: no.progresso, msg: no.msg } })
     const lateral = PLATAFORMAS.includes(id as Plataforma) // nas plataformas os cartões vão ao lado (embaixo tem o próximo nó)
     const textos = no.itens.slice(0, MAX_CARTOES).map((item) => {
       const c = porNome.get(item)
@@ -183,8 +187,8 @@ export function Esteira({ jobs }: { jobs: Job[] | null }) {
   const [aberto, setAberto] = useState<IdNo | null>(null)
   // padrão: o job rodando mais recente, senão o mais recente (a lista já vem do mais novo para o mais velho)
   const jobId = jobs?.some((j) => j.id === escolhido) ? escolhido : (jobs?.find((j) => j.status === 'rodando') ?? jobs?.[0])?.id ?? null
-  const { dados, resumo, atualizar } = useEsteira(jobId)
-  const fluxo = useMemo(() => dados && montar(dados.esteira, dados.job.cortes), [dados])
+  const { dados, resumo, offline, atualizar } = useEsteira(jobId)
+  const fluxo = useMemo(() => dados && montar(dados.esteira, dados.job.cortes, offline), [dados, offline])
 
   if (jobs === null) return <Skeleton className="h-[440px] w-full" />
   if (!jobs.length)
@@ -200,6 +204,11 @@ export function Esteira({ jobs }: { jobs: Job[] | null }) {
         </Select>
         <span className="text-xs text-muted-foreground">Clique num nó para ver o que está nele.</span>
       </div>
+      {offline && (
+        <p role="alert" className="flex items-center gap-2 rounded-md bg-destructive/15 p-2 text-sm text-destructive">
+          <WifiOff className="size-4 shrink-0" /> Sem conexão com o servidor: a esteira mostra a última situação conhecida.
+        </p>
+      )}
 
       <div className="relative h-[440px] overflow-hidden rounded-xl border bg-card/40">
         {fluxo ? (
