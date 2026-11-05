@@ -97,8 +97,8 @@ def aprovar(corte_json, legenda, hashtags):
             raise ValueError("esse corte já foi aprovado")
         recut.gravar_json(_arquivo(corte_json), {
             "aprovado_em": _agora(), "legenda": legenda, "hashtags": list(hashtags),
-            "plataformas": {"youtube": _estado("enviando"), "instagram": _estado("enviando"), "tiktok": _estado("manual")}})
-    return ["youtube", "instagram"]
+            "plataformas": {**{p: _estado("enviando") for p in contas.PLATAFORMAS}, "tiktok": _estado("manual")}})
+    return list(contas.PLATAFORMAS)
 
 
 def tentar_de_novo(corte_json, plataforma, forcar):

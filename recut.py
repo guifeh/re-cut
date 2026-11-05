@@ -514,7 +514,6 @@ def extrair_json(texto):
 
 
 ETAPAS = ("entrada", "baixar", "transcrever", "ia", "renderizar", "ranking")
-ESTADOS = ("inicio", "progresso", "fim", "erro")
 PREFIXO_EVENTO = "@@ "  # linhas do log que a interface lê para animar a esteira
 ETAPA_ATUAL, ITEM_ATUAL = "entrada", ""
 

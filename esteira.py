@@ -2,9 +2,10 @@
 import json
 from datetime import date
 
+import contas
 from recut import ETAPAS, PREFIXO_EVENTO
 
-PLATAFORMAS = ("youtube", "instagram", "tiktok")
+PLATAFORMAS = contas.PLATAFORMAS + ("tiktok",)  # TikTok é manual: sem conta, o link é colado
 NOS = ETAPAS + ("aprovacao",) + PLATAFORMAS
 
 
