@@ -34,6 +34,18 @@ A análise usa a **sessão local de um agente CLI já logado** no computador, se
 
 Tenta na ordem acima (ou começa pelo de `RECUT_AGENTE`); se um falhar, tenta o próximo. É preciso ter pelo menos um instalado e logado.
 
+## Esteira e publicação
+
+A aba **Esteira** mostra o caminho de cada vídeo como nós ligados (estilo n8n): entrada, transcrição, análise, regra do lote, montagem, sua aprovação e publicação. O estado de cada nó é o **real**, lido do log do job (o nó que está rodando ganha a borda girando; erro e "aguardando você" aparecem no próprio nó). Cartões andam entre os nós, há um feed dos eventos e um resumo do dia.
+
+- **Aprovação:** os cortes que chegam em "Sua aprovação" abrem um painel com nota, motivo, 3 legendas para escolher e hashtags. **Aprovar e postar** publica na hora no **YouTube Shorts** e no **Instagram Reels** e devolve os links. Cada plataforma tem seu estado em `<corte>.publicacao`.
+- **TikTok é manual**, de propósito: apps da API do TikTok sem auditoria só postam em modo privado e exigem a conta inteira privada ([regras](https://developers.tiktok.com/doc/content-sharing-guidelines)). O painel entrega a legenda e o vídeo para você postar; QR code para o celular ainda não existe.
+- **Estado "incerto":** se a resposta de uma plataforma se perde depois do envio (queda, timeout), o corte fica "incerto" porque o post pode ter saído. Nunca reenvia sozinho, para não duplicar; você confere na rede e cola o link ou manda tentar de novo.
+- **Contas:** na aba **Contas** você conecta YouTube e Instagram (credenciais do app, conectar, reconectar, desconectar). Passo a passo em [docs/contas-passo-a-passo.md](docs/contas-passo-a-passo.md).
+- **Segurança:** tokens e credenciais ficam só em `contas/` (no `.gitignore`) e a API nunca os devolve. O servidor só aceita `Host` 127.0.0.1/localhost e POST com JSON (o navegador de outro site não consegue disparar nada).
+
+Desenho completo em `docs/superpowers/specs/2026-11-04-esteira-automatica-design.md`.
+
 ## Requisitos
 
 - Python 3.12
@@ -62,7 +74,7 @@ npm run build
 python server.py                   # http://localhost:8000
 ```
 
-Abas **Lixeira** (itens excluídos e histórico), **Cortar** (link, upload ou monitorar live, com a escolha do template), **Cortes** (grade ordenada pela nota, player, copiar descrição, baixar MP4, trocar o template do corte ou de todos do vídeo), **Templates** (galeria e editor com prévia animada) e **Estratégias**.
+Abas **Esteira** (veja acima), **Contas**, **Lixeira** (itens excluídos e histórico), **Cortar** (link, upload ou monitorar live, com a escolha do template), **Cortes** (grade ordenada pela nota, player, copiar descrição, baixar MP4, trocar o template do corte ou de todos do vídeo), **Templates** (galeria e editor com prévia animada) e **Estratégias**.
 
 Para desenvolver o frontend com hot reload: `python server.py` em um terminal e `npm run dev` em `frontend/` (o Vite encaminha `/api` e `/files` para a porta 8000).
 
@@ -98,6 +110,12 @@ Saída: para cada corte, `.mp4` (1080×1920), `.jpg` (thumbnail), `.json` (nota,
 | `GET` | `/api/efeitos/sons` | sons disponíveis em `efeitos/` (gera os padrão na primeira vez) |
 | `POST` | `/api/jobs/{id}/aplicar_template` | `{template, cortes?}` renderiza de novo os cortes (todos, se `cortes` faltar) |
 | `GET` | `/api/agentes` | agentes de IA disponíveis |
+| `GET` | `/api/esteira/{id}` · `/api/esteira/resumo` | nós, cartões e feed de um job / resumo do dia |
+| `POST` | `/api/jobs/{id}/cortes/aprovar` | `{json, legenda, hashtags}` aprova e posta no YouTube e Instagram |
+| `POST` | `/api/jobs/{id}/cortes/publicacao` | `{json, plataforma, acao: tentar\|forcar\|link, link?}` tenta de novo, força o reenvio de um "incerto" ou registra o link colado (TikTok manual) |
+| `GET` | `/api/contas` | contas sem segredos (só conectada ou não) |
+| `POST` | `/api/contas/{youtube\|instagram}/configurar` · `conectar` · `codigo` · `desconectar` | credenciais do app, URL de autorização, código do Instagram, remover |
+| `GET` | `/api/contas/youtube/retorno` | volta do OAuth do Google |
 | `GET` | `/files/jobs/...` | vídeos e thumbnails (com suporte a Range) |
 
 Cada job roda `recut.py` num subprocesso; a API só aceita arquivo local vindo de `/api/upload`.
@@ -106,16 +124,16 @@ Cada job roda `recut.py` num subprocesso; a API só aceita arquivo local vindo d
 
 ```bash
 pip install pytest
-python -m pytest test_recut.py
+python -m pytest test_recut.py test_lixeira.py test_esteira.py test_contas.py test_publicar.py test_server.py
 ```
 
-Cobrem as partes de lógica: legendas, recorte, regra do lote, horários, estratégias, escolha de agente, extração de JSON e suavização do tracking.
+Cobrem a lógica: legendas, recorte, regra do lote, horários, estratégias, escolha de agente, extração de JSON, tracking, lixeira, estado da Esteira, contas/OAuth, publicação e rotas do servidor.
 
 ## Limitações conhecidas
 
 - Momentos que cruzam a borda entre dois lotes de 10 min podem se perder.
 - O tracking segue o rosto, mas não remove sobreposições (ex.: tela compartilhada) quando a pessoa está na borda do quadro.
-- Sem editor de cortes (trim, b-roll, elementos livres) nem publicação automática nas redes.
+- Sem editor de cortes (trim, b-roll, elementos livres) nem publicação no TikTok (manual).
 - Fontes dos templates: só as do sistema que o libass encontra (as do Windows na lista); uma fonte ausente vira Arial.
 - Cortes gerados antes dos templates não guardam as palavras, então não dá para trocar o template deles; gere de novo.
 - A prévia do editor é uma aproximação em CSS; o vídeo final é desenhado pelo ffmpeg/libass com as mesmas medidas.
