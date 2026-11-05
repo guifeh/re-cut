@@ -42,7 +42,7 @@ A aba **Esteira** mostra o caminho de cada vídeo como nós ligados (estilo n8n)
 - **TikTok é manual**, de propósito: apps da API do TikTok sem auditoria só postam em modo privado e exigem a conta inteira privada ([regras](https://developers.tiktok.com/doc/content-sharing-guidelines)). O painel entrega a legenda e o vídeo para você postar; QR code para o celular ainda não existe.
 - **Estado "incerto":** se a resposta de uma plataforma se perde depois do envio (queda, timeout), o corte fica "incerto" porque o post pode ter saído. Nunca reenvia sozinho, para não duplicar; você confere na rede e cola o link ou manda tentar de novo.
 - **Contas:** na aba **Contas** você conecta YouTube e Instagram (credenciais do app, conectar, reconectar, desconectar). Passo a passo em [docs/contas-passo-a-passo.md](docs/contas-passo-a-passo.md).
-- **Segurança:** tokens e credenciais ficam só em `contas/` (no `.gitignore`) e a API nunca os devolve. O servidor só aceita `Host` 127.0.0.1/localhost e POST com JSON (o navegador de outro site não consegue disparar nada).
+- **Segurança:** tokens e credenciais ficam só em `contas/` (no `.gitignore`) e a API nunca os devolve. O servidor só aceita `Host` localhost ou IP (nunca nome de domínio) e POST com JSON (o navegador de outro site não consegue disparar nada).
 
 Desenho completo em `docs/superpowers/specs/2026-11-04-esteira-automatica-design.md`.
 
@@ -75,6 +75,8 @@ python server.py                   # http://localhost:8000
 ```
 
 Abas **Esteira** (veja acima), **Contas**, **Lixeira** (itens excluídos e histórico), **Cortar** (link, upload ou monitorar live, com a escolha do template), **Cortes** (grade ordenada pela nota, player, copiar descrição, baixar MP4, trocar o template do corte ou de todos do vídeo), **Templates** (galeria e editor com prévia animada) e **Estratégias**.
+
+Para abrir para quem está na mesma rede: `RECUT_REDE=1 python server.py` (PowerShell: `$env:RECUT_REDE=1; python server.py`) e passe o endereço `http://<IP do PC>:8000` que ele imprime (ou o IPv4 do `ipconfig`). Na primeira vez o Windows pergunta se libera o Python no firewall: libere só em rede **privada**. Se não abrir de outra máquina, confira em "Permitir um aplicativo pelo Firewall do Windows" se o Python não ficou bloqueado. Não tem senha: quem está na rede pode aprovar e postar nas suas contas. Conectar YouTube continua só pelo próprio PC (o retorno do Google vai para 127.0.0.1).
 
 Para desenvolver o frontend com hot reload: `python server.py` em um terminal e `npm run dev` em `frontend/` (o Vite encaminha `/api` e `/files` para a porta 8000).
 
