@@ -334,19 +334,20 @@ function Feed({ esteira }: { esteira: DadosEsteira | null }) {
 }
 
 function Resumo({ resumo }: { resumo: ResumoDoDia | null }) {
-  const itens: [string, keyof ResumoDoDia, string][] = [
-    ['Cortes gerados', 'cortes', ''],
-    ['Aprovados', 'aprovados', ''],
-    ['Postados', 'postados', 'text-emerald-500'],
-    ['Erros', 'erros', 'text-destructive'],
+  // [rótulo, definição, chave, cor]: as definições são as de esteira.resumo_do_dia
+  const itens: [string, string, keyof ResumoDoDia, string][] = [
+    ['Cortes gerados', 'criados hoje', 'cortes', ''],
+    ['Cortes aprovados', 'aprovados hoje', 'aprovados', ''],
+    ['Posts publicados', 'um por plataforma, postado hoje', 'postados', 'text-emerald-500'],
+    ['Erros de publicação', 'por plataforma, nos cortes aprovados hoje', 'erros', 'text-destructive'],
   ]
   return (
     <section className="flex flex-col gap-2 rounded-xl border p-4">
       <h3 className="text-sm font-medium text-muted-foreground">Hoje</h3>
       <dl className="grid grid-cols-2 gap-3">
-        {itens.map(([rotulo, chave, cor]) => (
+        {itens.map(([rotulo, definicao, chave, cor]) => (
           <div key={chave} className="rounded-lg bg-muted/50 p-3">
-            <dt className="text-xs text-muted-foreground">{rotulo}</dt>
+            <dt className="text-xs text-muted-foreground">{rotulo}<span className="block text-[10px] opacity-75">{definicao}</span></dt>
             <dd className={`text-2xl font-semibold ${resumo?.[chave] ? cor : ''}`}>{resumo ? resumo[chave] : '–'}</dd>
           </div>
         ))}

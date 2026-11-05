@@ -136,8 +136,11 @@ def _feed_publicacao(aprovados):
 
 
 def resumo_do_dia(cortes: list[dict], hoje: date) -> dict:
-    """cortes: criados no dia; aprovados: aprovados no dia; postados: plataformas com estado ok e `em`
-    no dia; erros: plataformas em erro/incerto entre os cortes aprovados no dia."""
+    """Contagens de "Hoje" na Esteira (os rótulos da tela entre aspas):
+    cortes ("Cortes gerados"): cortes com criado_em no dia;
+    aprovados ("Cortes aprovados"): cortes com aprovado_em no dia;
+    postados ("Posts publicados"): posts, um por plataforma, com estado ok e `em` no dia (TikTok conta ao colar o link);
+    erros ("Erros de publicação"): plataformas em erro/incerto entre os cortes aprovados no dia."""
     d = hoje.isoformat()
     pubs = [c.get("publicacao") or {} for c in cortes]
     do_dia = [p for p in pubs if str(p.get("aprovado_em", ""))[:10] == d]
