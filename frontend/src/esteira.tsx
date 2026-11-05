@@ -113,7 +113,10 @@ function NoEtapa({ data }: NodeProps<NoFluxo>) {
         <span className="line-clamp-2 text-xs font-medium leading-tight">{rotulo}</span>
         {sub && <span className="mt-0.5 line-clamp-1 text-[10px] text-muted-foreground" title={sub}>{sub}</span>}
         {data.estado === 'erro' && publicacao && (
-          <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-destructive"><RotateCcw className="size-3" /> tentar de novo</span>
+          // abre o painel do nó (o clique sobe até o onNodeClick), onde fica o botão real por corte
+          <button type="button" aria-label={`Tentar de novo: abrir ${rotulo}`} className="mt-1 inline-flex cursor-pointer items-center gap-1 rounded text-[10px] font-medium text-destructive hover:underline focus-visible:outline-2 focus-visible:outline-destructive">
+            <RotateCcw className="size-3" /> tentar de novo
+          </button>
         )}
       </div>
     </div>
