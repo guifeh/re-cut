@@ -251,3 +251,19 @@ def test_ok_sem_link_aceita_colar_link_uma_vez(corte, pasta):
     assert ler_publicacao(corte, set())["plataformas"]["instagram"]["link"] == "https://www.instagram.com/reel/abc/"
     with pytest.raises(ValueError, match="não espera link"):  # ok com link: não troca
         colar_link(corte, "instagram", "https://www.instagram.com/reel/outro/")
+
+
+def test_youtube_tira_sinais_de_menor_e_maior(corte, pasta):
+    aprovar(corte, "<3 o melhor > tudo", ["a"])
+    http = Falso(*youtube_ok())
+    enviar(corte, "youtube", http=http, pasta_contas=pasta)
+    snippet = http.chamadas[0]["dados"]["snippet"]
+    assert snippet["title"] == "3 o melhor  tudo" and "<" not in snippet["description"] and ">" not in snippet["description"]
+
+
+def test_plataforma_sem_estado_conta_como_ausente(corte):
+    corte.with_suffix(".publicacao").write_text(json.dumps(
+        {"aprovado_em": "2026-11-04T10:00:00", "plataformas": {"youtube": {"link": None}, "tiktok": {"estado": "manual"}}}))
+    assert list(ler_publicacao(corte, set())["plataformas"]) == ["tiktok"]
+    with pytest.raises(ValueError):
+        tentar_de_novo(corte, "youtube", False)

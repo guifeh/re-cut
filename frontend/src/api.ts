@@ -11,11 +11,14 @@ export type Corte = {
   criado_em: string
   video_url: string
   thumb_url: string
+  /** nome do .mp4 do corte (sem pasta) */
+  arquivo: string
   json: string
   template?: string
   momentos?: Momento[]
   reaplicavel: boolean
-  /** nome do arquivo sem extensão; é o item que a esteira mostra na aprovação e nas plataformas */
+  /** identidade do corte: caminho relativo ao job sem .json (único mesmo com lotes de mesmo nome em transmissões diferentes);
+   * é o item da esteira na aprovação e nas plataformas. Para mostrar, use o título */
   nome: string
   /** 3 opções de legenda da IA (cortes antigos não têm) */
   legendas?: string[]

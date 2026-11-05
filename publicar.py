@@ -36,8 +36,12 @@ def _agora():
 
 
 def _ler(corte_json):
+    """Plataforma sem "estado" (arquivo editado à mão, versão antiga) conta como ausente em vez de quebrar a lista."""
     f = _arquivo(corte_json)
-    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    pub = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    if "plataformas" in pub:
+        pub["plataformas"] = {p: e for p, e in pub["plataformas"].items() if isinstance(e, dict) and "estado" in e}
+    return pub
 
 
 def _estado(estado, **extra):
@@ -72,6 +76,11 @@ def ler_publicacao(corte_json, ativos):
         if orfaos:
             recut.gravar_json(_arquivo(corte_json), pub)
         return pub
+
+
+def sem_sinais(texto):
+    """O YouTube recusa (400) título e descrição com < ou >."""
+    return texto.replace("<", "").replace(">", "")
 
 
 def texto_final(legenda, hashtags):
@@ -158,7 +167,7 @@ def enviar(corte_json, plataforma, http=None, esperar=time.sleep, pasta_contas=c
 
 def _youtube(http, tok, video, legenda, texto, etapa):
     tamanho = video.stat().st_size
-    metadados = {"snippet": {"title": legenda.strip()[:100], "description": texto, "categoryId": "22"},
+    metadados = {"snippet": {"title": sem_sinais(legenda).strip()[:100], "description": sem_sinais(texto), "categoryId": "22"},
                  "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False}}
     status, cab, corpo = http("POST", "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable"
                               "&part=snippet,status", dados=metadados, cabecalhos={

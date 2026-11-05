@@ -67,13 +67,17 @@ def resumo(job_dir, com_log=False):
         rel = f.parent.relative_to(RAIZ).as_posix()
         versao = int(f.stat().st_mtime)
         c["json"] = f.relative_to(job_dir).as_posix()
-        c["nome"] = f.stem
+        # identidade do corte: caminho relativo ao job, sem .json. Numa live cada transmissão tem sua pasta e a
+        # numeração dos lotes recomeça, então só o nome do arquivo (lote_0000_corte01) se repete no mesmo job
+        c["nome"] = f.relative_to(job_dir).with_suffix("").as_posix()
         c["publicacao"] = publicar.ler_publicacao(f, enviando_agora)
         c["video_url"] = f"/files/{rel}/{c['arquivo']}?v={versao}"
         c["thumb_url"] = f"/files/{rel}/{c['thumbnail']}?v={versao}"
         cortes.append(c)
     m["cortes"] = sorted(cortes, key=lambda c: -c["nota"])
     log = (job_dir / "log.txt").read_text(encoding="utf-8", errors="replace") if (job_dir / "log.txt").exists() else ""
+    # eventos "@@ {...}" são para a esteira (esteira_do_job lê o arquivo cru); o log mostrado é só o texto
+    log = "\n".join(l for l in log.splitlines() if not l.startswith(recut.PREFIXO_EVENTO))
     m["log"] = log[-20000:] if com_log else log.strip().splitlines()[-1:] or [""]
     return m
 

@@ -264,3 +264,37 @@ def test_get_com_dado_quebrado_e_500_com_erro(servidor):
     (server.JOBS / JID / "fonte_corte01.json").write_text("{quebrado")
     status, r = pedir(servidor, f"/api/esteira/{JID}")
     assert status == 500 and r["erro"]
+
+
+def test_cortes_de_duas_transmissoes_com_mesmo_nome_sao_distintos(servidor):
+    job = server.JOBS / JID
+    for stream in ("canal/20261104-100000", "canal/20261104-200000"):
+        pasta = job / stream
+        pasta.mkdir(parents=True)
+        (pasta / "lote_0000_corte01.json").write_text(json.dumps({
+            "arquivo": "lote_0000_corte01.mp4", "thumbnail": "lote_0000_corte01.jpg", "titulo": stream, "nota": 7}))
+    _, d = pedir(servidor, f"/api/esteira/{JID}")
+    itens = d["esteira"]["nos"]["aprovacao"]["itens"]
+    assert {"canal/20261104-100000/lote_0000_corte01", "canal/20261104-200000/lote_0000_corte01"} <= set(itens)
+    assert len(itens) == len(set(itens)) == 3
+    nomes = {c["nome"]: c["json"] for c in d["job"]["cortes"]}
+    assert nomes["canal/20261104-200000/lote_0000_corte01"] == "canal/20261104-200000/lote_0000_corte01.json"
+
+
+def test_log_do_job_nao_mostra_eventos(servidor):
+    (server.JOBS / JID / "log.txt").write_text(
+        '[v] transcrevendo\n@@ {"etapa": "ia", "estado": "inicio", "item": "v"}\n', encoding="utf-8")
+    _, jobs = pedir(servidor, "/api/jobs")
+    assert jobs[0]["log"] == ["[v] transcrevendo"]
+    _, job = pedir(servidor, f"/api/jobs/{JID}")
+    assert "@@" not in job["log"] and "transcrevendo" in job["log"]
+    _, d = pedir(servidor, f"/api/esteira/{JID}")
+    assert d["esteira"]["nos"]["ia"]["estado"] == "erro"  # a esteira ainda lê os eventos (job parado: interrompido)
+
+
+def test_publicacao_sem_estado_nao_quebra_a_lista(servidor):
+    corte().with_suffix(".publicacao").write_text(json.dumps(
+        {"aprovado_em": "2026-11-04T10:00:00", "plataformas": {"youtube": {"link": None}}}))
+    status, jobs = pedir(servidor, "/api/jobs")
+    assert status == 200 and jobs[0]["cortes"][0]["publicacao"]["plataformas"] == {}
+    assert pedir(servidor, f"/api/esteira/{JID}")[0] == 200
