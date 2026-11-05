@@ -653,7 +653,7 @@ def escolher_cortes(transcricao, cfg, item=""):
     if cfg["estrategia"]:
         sistema += f"\n\nEstratégia do criador (o que procurar e como escrever os títulos; siga-a):\n{cfg['estrategia']}"
     marcar("ia", "inicio", item, msg="Escolhendo cortes com a IA")
-    with tempfile.TemporaryDirectory() as tmp:  # cwd vazio: o agente não lê CLAUDE.md/AGENTS.md do projeto
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:  # cwd vazio: o agente não lê CLAUDE.md/AGENTS.md do projeto
         for nome, exe in agentes_disponiveis(os.getenv("RECUT_AGENTE", "")):
             try:
                 cortes = rodar_agente(nome, exe, sistema, transcricao, Path(tmp))["cortes"]
