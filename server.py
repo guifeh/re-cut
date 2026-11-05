@@ -9,6 +9,7 @@ import mimetypes
 import os
 import re
 import secrets
+import socket
 import subprocess
 import sys
 import threading
@@ -543,6 +544,11 @@ if __name__ == "__main__":
     threading.Thread(target=expirar_periodicamente, daemon=True).start()
     print(f"re-cut em http://localhost:{PORTA}")
     if REDE:
-        import socket
-        print(f"na rede: http://{socket.gethostbyname(socket.gethostname())}:{PORTA} (sem senha: qualquer um na rede usa)")
+        try:  # UDP sem enviar nada: o SO escolhe a placa da rota padrão (gethostname pega VPN/Hyper-V no Windows)
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                ip = s.getsockname()[0]
+        except OSError:
+            ip = "<IPv4 do ipconfig>"
+        print(f"na rede: http://{ip}:{PORTA} (sem senha: qualquer um na rede usa)")
     ThreadingHTTPServer(("0.0.0.0" if REDE else "127.0.0.1", PORTA), Handler).serve_forever()
