@@ -72,6 +72,8 @@ def configurar(token, http=None, pasta=contas.PASTA):
     token = (token or "").strip()
     if not token:
         raise ValueError("cole o token do bot")
+    if not re.fullmatch(r"\d+:[\w-]+", token):  # antes de qualquer chamada: http.client levantaria InvalidURL com o token
+        raise ValueError("token inválido: copie o token inteiro que o BotFather mandou")
     bot = chamar(token, "getMe", http=http)["username"]  # token inválido: sobe antes de gravar
     with contas._trava:
         d = conta(pasta)
@@ -110,7 +112,7 @@ def _link_tiktok(texto):
     for url in re.findall(r"https://\S+", texto):
         host = (urllib.parse.urlsplit(url).hostname or "").lower()
         if host == "tiktok.com" or host.endswith(".tiktok.com"):
-            return url
+            return url.rstrip(".,;:!?)]}>'\"")
     return None
 
 
@@ -164,12 +166,14 @@ def ouvir(jobs, http=None, pasta=contas.PASTA, dormir=time.sleep, continuar=lamb
         try:
             dados = {"offset": conta(pasta).get("offset", 0), "timeout": 50, "allowed_updates": ["message"]}
             for u in chamar(token, "getUpdates", dados, http=http, timeout=60) or []:
-                processar(u, jobs, http, pasta)
-                with contas._trava:
-                    d = conta(pasta)
-                    if d.get("token") == token:  # trocou de bot ou desconectou: o offset era do antigo
-                        d["offset"] = u["update_id"] + 1
-                        contas.salvar("telegram", d, pasta)
+                try:
+                    processar(u, jobs, http, pasta)
+                finally:  # update com erro não pode repetir para sempre e travar os seguintes
+                    with contas._trava:
+                        d = conta(pasta)
+                        if d.get("token") == token:  # trocou de bot ou desconectou: o offset era do antigo
+                            d["offset"] = u["update_id"] + 1
+                            contas.salvar("telegram", d, pasta)
             espera = 1
         except Exception as e:  # noqa: BLE001 - a escuta não pode morrer; só o tipo (a mensagem pode ter o token)
             print(f"telegram: escuta falhou ({type(e).__name__})", file=sys.stderr)

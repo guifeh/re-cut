@@ -197,3 +197,36 @@ def test_ouvir_grava_offset_e_volta_apos_erro(tmp_path, pareado):
     _, url, dados, _, _ = falso.chamadas[0]
     assert url.endswith("/getUpdates") and dados["timeout"] == 50 and dados["allowed_updates"] == ["message"]
     assert falso.timeout == 60
+
+
+def test_token_mal_formado_recusado_sem_http_e_sem_vazar(tmp_path):
+    http = Falso()
+    with pytest.raises(ValueError) as e:
+        telegram.configurar("123:AB CD", http, tmp_path)
+    assert http.chamadas == [] and "AB CD" not in str(e.value) and "token inválido" in str(e.value)
+
+
+def test_link_tiktok_sem_pontuacao_final():
+    assert telegram._link_tiktok("veja https://vm.tiktok.com/x/.") == "https://vm.tiktok.com/x/"
+    assert telegram._link_tiktok("(https://vm.tiktok.com/x/)!?") == "https://vm.tiktok.com/x/"
+
+
+def test_ouvir_update_com_erro_avanca_offset(tmp_path, pareado, monkeypatch):
+    http = Falso((200, {"ok": True, "result": [msg("a", update_id=5)]}),
+                 (200, {"ok": True, "result": [msg("b", update_id=6)]}))
+    vistos, voltas = [], []
+
+    def processar(u, *a, **kw):
+        vistos.append(u["update_id"])
+        if u["update_id"] == 5:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(telegram, "processar", processar)
+
+    def continuar():
+        voltas.append(1)
+        return len(voltas) <= 2
+
+    telegram.ouvir(tmp_path / "jobs", http, pareado, lambda s: None, continuar)
+    assert vistos == [5, 6] and telegram.conta(pareado)["offset"] == 7
+    assert http.chamadas[1][2]["offset"] == 6

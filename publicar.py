@@ -113,7 +113,10 @@ def texto_final(legenda, hashtags):
 def aprovar(corte_json, legenda, hashtags, pasta_contas=contas.PASTA):
     """Grava a escolha e marca YouTube/Instagram (e o Telegram, se pareado) como "enviando"; devolve o que o
     servidor envia."""
-    tg = telegram.conta(pasta_contas)
+    try:
+        tg = telegram.conta(pasta_contas)
+    except (OSError, ValueError):  # conta ilegível: Telegram não atrapalha YouTube/Instagram
+        tg = {}
     pareado = bool(tg.get("token") and tg.get("chat_id"))
     with _trava:
         if _ler(corte_json).get("aprovado_em"):

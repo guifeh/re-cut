@@ -404,3 +404,9 @@ def test_telegram_resposta_sem_message_id_fica_incerto(corte, pareado):
     assert r["estado"] == "incerto"
     with pytest.raises(ValueError, match="pode ter saído"):
         tentar_de_novo(corte, "telegram", False, pasta_contas=pareado)
+
+
+def test_aprovar_conta_telegram_corrompida_nao_trava(corte, pasta):
+    (pasta / "telegram.json").write_text("{quebrado", encoding="utf-8")
+    assert aprovar(corte, "x", [], pasta_contas=pasta) == ["youtube", "instagram"]
+    assert "telegram" not in ler_publicacao(corte, set())
