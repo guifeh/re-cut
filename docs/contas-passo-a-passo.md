@@ -212,9 +212,26 @@ https://support.google.com/cloud/answer/13464323 (uso pessoal dispensa verifica�
 
 ---
 
+## 4. Telegram (para levar o corte ao celular e postar no TikTok)
+
+Opcional. O bot manda o vídeo e o texto de cada corte aprovado para o seu Telegram.
+
+1. No Telegram, abra o **@BotFather** e envie `/newbot`. Escolha um nome e um usuário (termina em `bot`).
+2. Copie o **token** que ele devolve (parece `123456:ABC...`). Não compartilhe.
+3. No re-cut, aba **Contas**, card Telegram: cole o token e salve.
+4. Clique em **Abrir no Telegram** e toque em **Começar**. A tela passa para "Conectado".
+5. Aprove um corte: o vídeo e a legenda chegam no chat. Poste no TikTok pelo celular e **responda (arraste a
+   mensagem para o lado) à mensagem do corte com o link do post**: o re-cut salva o link no corte.
+
+Vídeos acima de 50 MB não passam pelo bot: use o **Baixar** do painel. Só os cortes aprovados depois de conectar
+chegam ao Telegram.
+
+---
+
 ## Conferência final
 
 - [ ] Site `https://guifeh.github.io/re-cut-site/` abre, e o `callback.html` também.
 - [ ] Instagram: conta profissional, conta adicionada no app, redirect HTTPS salvo, app ID/secret do Instagram anotados.
 - [ ] YouTube: API ligada, app em **In production**, cliente Desktop criado, ID/secret anotados.
 - [ ] Nada disso foi salvo dentro do repositório do re-cut, só na tela Contas (`contas/`).
+- [ ] Telegram (opcional): token do BotFather colado na tela Contas e chat conectado (Começar).

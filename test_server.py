@@ -67,10 +67,12 @@ def envio_falso(monkeypatch, liberar=None):
     chamadas = []
 
     def enviar(corte_json, plataforma, **_):
-        estado = publicar.ler_publicacao(corte_json, server.enviando_agora)["plataformas"][plataforma]["estado"]
-        chamadas.append((plataforma, estado))
+        pub = publicar.ler_publicacao(corte_json, server.enviando_agora)
+        chamadas.append((plataforma, (pub["telegram"] if plataforma == "telegram" else pub["plataformas"][plataforma])["estado"]))
         if liberar:
             liberar.wait(5)
+        if plataforma == "telegram":
+            return publicar._mudar_telegram(corte_json, "ok")
         return publicar._mudar(corte_json, plataforma, "ok", link="https://youtube.com/shorts/x")
     monkeypatch.setattr(publicar, "enviar", enviar)
     return chamadas
@@ -108,6 +110,31 @@ def test_aprovar_dispara_envios_e_tiktok_fica_manual(servidor, monkeypatch):
     assert pub["plataformas"]["youtube"]["estado"] == "ok" and pub["plataformas"]["tiktok"]["estado"] == "manual"
 
 
+def test_contas_lista_telegram_sem_token(servidor):
+    contas.salvar("telegram", {"token": "123:SEGREDO", "bot": "meu_bot", "pareamento": "k3J9xQ"}, contas.PASTA)
+    status, r = pedir(servidor, "/api/contas")
+    assert status == 200
+    tg = next(i for i in r if i["plataforma"] == "telegram")
+    assert tg["configurada"] and not tg["conectada"] and tg["link_pareamento"] == "https://t.me/meu_bot?start=k3J9xQ"
+    assert "SEGREDO" not in json.dumps(r)
+
+
+def test_aprovar_dispara_telegram_quando_pareado(servidor, monkeypatch):
+    contas.salvar("telegram", {"token": "1:T", "bot": "b", "chat_id": 7, "nome": "G"}, contas.PASTA)
+    chamadas = envio_falso(monkeypatch)
+    status, r = pedir(servidor, APROVAR, PEDIDO)
+    assert status == 200
+    esperar_envios()
+    assert sorted(chamadas) == [("instagram", "enviando"), ("telegram", "enviando"), ("youtube", "enviando")]
+    assert publicar.ler_publicacao(corte(), set())["telegram"]["estado"] == "ok"
+
+
+def test_publicacao_telegram_link_e_400(servidor):
+    status, r = pedir(servidor, f"/api/jobs/{JID}/cortes/publicacao",
+                      {"json": "fonte_corte01.json", "plataforma": "telegram", "acao": "link", "link": "https://tiktok.com/x"})
+    assert status == 400 and "Telegram" in r["erro"]
+
+
 def test_aprovar_duas_vezes_so_envia_uma(servidor, monkeypatch):
     liberar = threading.Event()
     chamadas = envio_falso(monkeypatch, liberar)
@@ -125,8 +152,8 @@ def test_consulta_logo_depois_de_aprovar_nao_vira_incerto(servidor, monkeypatch)
     chamadas = envio_falso(monkeypatch, liberar)
     original = publicar.aprovar
 
-    def aprovar_e_consultar(*a):  # uma consulta concorrente cai logo depois da gravação de "enviando"
-        r = original(*a)
+    def aprovar_e_consultar(*a, **kw):  # uma consulta concorrente cai logo depois da gravação de "enviando"
+        r = original(*a, **kw)
         publicar.ler_publicacao(a[0], server.enviando_agora)
         return r
     monkeypatch.setattr(publicar, "aprovar", aprovar_e_consultar)
@@ -153,7 +180,7 @@ def test_tentar_de_novo_com_envio_ativo_e_recusado(servidor, monkeypatch):
 
 def test_tentar_de_novo_e_link(servidor, monkeypatch):
     chamadas = envio_falso(monkeypatch)
-    publicar.aprovar(corte(), "x", [])
+    publicar.aprovar(corte(), "x", [], pasta_contas=contas.PASTA)
     publicar._mudar(corte(), "youtube", "erro", erro="caiu")
     publicar._mudar(corte(), "instagram", "erro", erro="caiu")
     url = f"/api/jobs/{JID}/cortes/publicacao"
@@ -182,7 +209,7 @@ def test_api_contas_nao_vaza_segredo(servidor):
     with urllib.request.urlopen(f"http://127.0.0.1:{servidor}/api/contas", timeout=5) as r:
         texto = r.read().decode()
     assert "SEGREDO" not in texto
-    assert [c["conectada"] for c in json.loads(texto)] == [True, False]
+    assert [c["conectada"] for c in json.loads(texto)] == [True, False, False]
     assert pedir(servidor, "/api/contas/youtube/desconectar", {})[1]["conectada"] is False
     assert contas.ler("youtube", contas.PASTA) == {"client_id": "cid", "client_secret": "SEGREDO-1"}
 
@@ -302,3 +329,13 @@ def test_publicacao_sem_estado_nao_quebra_a_lista(servidor):
     status, jobs = pedir(servidor, "/api/jobs")
     assert status == 200 and jobs[0]["cortes"][0]["publicacao"]["plataformas"] == {}
     assert pedir(servidor, f"/api/esteira/{JID}")[0] == 200
+
+
+def test_publicacao_marca_outro_bot(servidor):
+    contas.salvar("telegram", {"token": "1:T", "bot": "novo", "chat_id": 7}, contas.PASTA)
+    for bot, chat, esperado in (("velho", 7, True), ("novo", 7, False), ("novo", 8, True)):
+        pub = publicar._ler(corte())
+        pub["telegram"] = {"estado": "ok", "erro": None, "em": "x", "mensagens": [], "bot": bot, "chat_id": chat}
+        publicar.recut.gravar_json(publicar._arquivo(corte()), pub)
+        _, r = pedir(servidor, f"/api/esteira/{JID}")
+        assert r["job"]["cortes"][0]["publicacao"]["telegram"]["outro_bot"] is esperado
