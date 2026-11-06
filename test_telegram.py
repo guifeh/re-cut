@@ -230,3 +230,11 @@ def test_ouvir_update_com_erro_avanca_offset(tmp_path, pareado, monkeypatch):
     telegram.ouvir(tmp_path / "jobs", http, pareado, lambda s: None, continuar)
     assert vistos == [5, 6] and telegram.conta(pareado)["offset"] == 7
     assert http.chamadas[1][2]["offset"] == 6
+
+
+def test_link_tiktok_sem_https_vira_https():
+    assert telegram._link_tiktok("olha http://vm.tiktok.com/x/") == "https://vm.tiktok.com/x/"
+    assert telegram._link_tiktok("vm.tiktok.com/x/.") == "https://vm.tiktok.com/x/"
+    assert telegram._link_tiktok("www.tiktok.com/@eu/video/1") == "https://www.tiktok.com/@eu/video/1"
+    assert telegram._link_tiktok("https://nao-tiktok.com/x") is None
+    assert telegram._link_tiktok("https://tiktok.com.evil.com/x") is None

@@ -328,7 +328,10 @@ function LinhaTelegram({ job, corte: c, estado: e, onMudou }: {
             : { ok: 'enviado', erro: 'erro', incerto: 'incerto' }[e.estado]}
         </span>
       </div>
-      {e.estado === 'erro' && (
+      {e.outro_bot && e.estado !== 'enviando' && (
+        <p className="break-words text-muted-foreground">enviado por outro bot: cole o link do TikTok na linha do TikTok</p>
+      )}
+      {!e.outro_bot && e.estado === 'erro' && (
         <>
           <p className="break-words text-destructive">{e.erro}</p>
           <Button variant="outline" size="sm" className="self-start" disabled={ocupado} onClick={() => acao('tentar')}>
@@ -336,7 +339,7 @@ function LinhaTelegram({ job, corte: c, estado: e, onMudou }: {
           </Button>
         </>
       )}
-      {e.estado === 'incerto' && (
+      {!e.outro_bot && e.estado === 'incerto' && (
         <>
           <p className="break-words text-muted-foreground">{e.erro ?? 'Não deu para confirmar o envio: confira no Telegram antes de enviar de novo.'}</p>
           <Button variant="outline" size="sm" className="self-start" disabled={ocupado} onClick={() => setReenviar(true)}>

@@ -329,3 +329,13 @@ def test_publicacao_sem_estado_nao_quebra_a_lista(servidor):
     status, jobs = pedir(servidor, "/api/jobs")
     assert status == 200 and jobs[0]["cortes"][0]["publicacao"]["plataformas"] == {}
     assert pedir(servidor, f"/api/esteira/{JID}")[0] == 200
+
+
+def test_publicacao_marca_outro_bot(servidor):
+    contas.salvar("telegram", {"token": "1:T", "bot": "novo", "chat_id": 7}, contas.PASTA)
+    for bot, chat, esperado in (("velho", 7, True), ("novo", 7, False), ("novo", 8, True)):
+        pub = publicar._ler(corte())
+        pub["telegram"] = {"estado": "ok", "erro": None, "em": "x", "mensagens": [], "bot": bot, "chat_id": chat}
+        publicar.recut.gravar_json(publicar._arquivo(corte()), pub)
+        _, r = pedir(servidor, f"/api/esteira/{JID}")
+        assert r["job"]["cortes"][0]["publicacao"]["telegram"]["outro_bot"] is esperado

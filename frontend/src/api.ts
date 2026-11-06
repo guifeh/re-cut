@@ -39,7 +39,7 @@ export type Publicacao = {
   hashtags?: string[]
   plataformas?: Partial<Record<Plataforma, EstadoPlataforma>>
   /** ausente se o Telegram não estava pareado na aprovação */
-  telegram?: { estado: 'enviando' | 'ok' | 'erro' | 'incerto'; erro: string | null; em: string; mensagens: number[] }
+  telegram?: { estado: 'enviando' | 'ok' | 'erro' | 'incerto'; erro: string | null; em: string; mensagens: number[]; bot?: string | null; chat_id?: number | null; outro_bot?: boolean }
 }
 
 export type ContaTelegram = {

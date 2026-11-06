@@ -109,7 +109,8 @@ def achar_corte(jobs, bot, chat_id, message_id):
 
 
 def _link_tiktok(texto):
-    for url in re.findall(r"https://\S+", texto):
+    for url in re.findall(r"(?<![\w.-])(?:https?://)?(?:[\w-]+\.)*tiktok\.com\S*", texto, re.I):
+        url = "https://" + re.sub(r"^https?://", "", url, flags=re.I)
         host = (urllib.parse.urlsplit(url).hostname or "").lower()
         if host == "tiktok.com" or host.endswith(".tiktok.com"):
             return url.rstrip(".,;:!?)]}>'\"")

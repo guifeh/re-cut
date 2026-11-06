@@ -23,8 +23,8 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 import contas
 import esteira
 import publicar
-import telegram
 import recut
+import telegram
 import lixeira as lixeira_mod
 from lixeira import Lixeira
 
@@ -56,6 +56,19 @@ def salvar_meta(job_dir, dados):
     (job_dir / "job.json").write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def publicacao_api(f):
+    """ler_publicacao + telegram.outro_bot: o registro saiu por um bot/chat que não é o da conta atual."""
+    pub = publicar.ler_publicacao(f, enviando_agora)
+    t = pub.get("telegram")
+    if t:
+        try:
+            d = telegram.conta(contas.PASTA)
+        except (OSError, ValueError):  # conta ilegível: não casa
+            d = {}
+        t["outro_bot"] = bool(t.get("bot") or t.get("chat_id")) and (t.get("bot"), t.get("chat_id")) != (d.get("bot"), d.get("chat_id"))
+    return pub
+
+
 def resumo(job_dir, com_log=False):
     m = meta(job_dir)
     with lock:
@@ -74,7 +87,7 @@ def resumo(job_dir, com_log=False):
         # identidade do corte: caminho relativo ao job, sem .json. Numa live cada transmissão tem sua pasta e a
         # numeração dos lotes recomeça, então só o nome do arquivo (lote_0000_corte01) se repete no mesmo job
         c["nome"] = f.relative_to(job_dir).with_suffix("").as_posix()
-        c["publicacao"] = publicar.ler_publicacao(f, enviando_agora)
+        c["publicacao"] = publicacao_api(f)
         c["video_url"] = f"/files/{rel}/{c['arquivo']}?v={versao}"
         c["thumb_url"] = f"/files/{rel}/{c['thumbnail']}?v={versao}"
         cortes.append(c)
@@ -260,7 +273,7 @@ def aprovar_corte(job_dir, dados):
     if not isinstance(hashtags, list) or not all(isinstance(h, str) for h in hashtags):
         raise ValueError("hashtags deve ser uma lista de textos")
     _disparar(f, (*contas.PLATAFORMAS, "telegram"), lambda: publicar.aprovar(f, legenda, hashtags, pasta_contas=contas.PASTA))
-    return publicar.ler_publicacao(f, enviando_agora)
+    return publicacao_api(f)
 
 
 def mudar_publicacao(job_dir, dados):
@@ -278,7 +291,7 @@ def mudar_publicacao(job_dir, dados):
         _disparar(f, [p], lambda: publicar.tentar_de_novo(f, p, acao == "forcar", pasta_contas=contas.PASTA) or [p])
     else:
         raise ValueError("acao deve ser tentar, forcar ou link")
-    return publicar.ler_publicacao(f, enviando_agora)
+    return publicacao_api(f)
 
 
 def texto(dados, chave):
