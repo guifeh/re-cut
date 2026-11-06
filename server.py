@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 import contas
 import esteira
 import publicar
+import telegram
 import recut
 import lixeira as lixeira_mod
 from lixeira import Lixeira
@@ -258,19 +259,21 @@ def aprovar_corte(job_dir, dados):
         raise ValueError("escreva a legenda")
     if not isinstance(hashtags, list) or not all(isinstance(h, str) for h in hashtags):
         raise ValueError("hashtags deve ser uma lista de textos")
-    _disparar(f, contas.PLATAFORMAS, lambda: publicar.aprovar(f, legenda, hashtags, pasta_contas=contas.PASTA))
+    _disparar(f, (*contas.PLATAFORMAS, "telegram"), lambda: publicar.aprovar(f, legenda, hashtags, pasta_contas=contas.PASTA))
     return publicar.ler_publicacao(f, enviando_agora)
 
 
 def mudar_publicacao(job_dir, dados):
     f = corte_do_job(job_dir, dados.get("json"))
     p, acao = dados.get("plataforma"), dados.get("acao")
-    if p not in esteira.PLATAFORMAS:
+    if p not in (*esteira.PLATAFORMAS, "telegram"):
         raise ValueError(f"plataforma desconhecida: {p}")
     if acao == "link":
+        if p == "telegram":
+            raise ValueError("o Telegram não recebe link")
         publicar.colar_link(f, p, texto(dados, "link"))
     elif acao in ("tentar", "forcar"):
-        if p not in contas.PLATAFORMAS:
+        if p not in (*contas.PLATAFORMAS, "telegram"):
             raise ValueError(f"o {p} é manual: cole o link do post")
         _disparar(f, [p], lambda: publicar.tentar_de_novo(f, p, acao == "forcar", pasta_contas=contas.PASTA) or [p])
     else:
@@ -401,7 +404,7 @@ class Handler(SimpleHTTPRequestHandler):
             if partes[:2] == ["api", "esteira"] and len(partes) == 3:
                 return self.json(esteira_do_job(self.job_dir(partes[2])))
             if url.path == "/api/contas":
-                return self.json([contas.publico(p, contas.PASTA) for p in contas.PLATAFORMAS])
+                return self.json([contas.publico(p, contas.PASTA) for p in contas.PLATAFORMAS] + [telegram.publico(contas.PASTA)])
             if url.path == "/api/contas/youtube/retorno":
                 self.send_response(302)
                 self.send_header("Location", retorno_youtube(url.query))
@@ -492,6 +495,10 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.json(mudar_publicacao(self.job_dir(partes[2]), self.corpo_json()))
             if partes[:2] == ["api", "contas"] and len(partes) == 4:
                 p, acao = partes[2], partes[3]
+                if p == "telegram" and acao == "configurar":
+                    return self.json(telegram.configurar(texto(self.corpo_json(), "token"), pasta=contas.PASTA))
+                if p == "telegram" and acao == "desconectar":
+                    return self.json(telegram.desconectar(contas.PASTA))
                 if acao == "configurar":
                     d = self.corpo_json()
                     contas.configurar(p, texto(d, "client_id"), texto(d, "client_secret"), pasta=contas.PASTA)
@@ -545,6 +552,7 @@ class Handler(SimpleHTTPRequestHandler):
 if __name__ == "__main__":
     JOBS.mkdir(exist_ok=True)
     threading.Thread(target=expirar_periodicamente, daemon=True).start()
+    threading.Thread(target=telegram.ouvir, args=(JOBS,), kwargs={"pasta": contas.PASTA}, daemon=True).start()
     print(f"re-cut em http://localhost:{PORTA}")
     if REDE:
         try:  # UDP sem enviar nada: o SO escolhe a placa da rota padrão (gethostname pega VPN/Hyper-V no Windows)
