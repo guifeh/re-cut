@@ -1,6 +1,10 @@
 """Telegram: conta do bot (contas/telegram.json) e chamadas à Bot API. O token nunca sai daqui: erros trazem ***."""
 import json
+import re
 import secrets
+import sys
+import time
+import urllib.parse
 import uuid
 from pathlib import Path
 
@@ -84,3 +88,90 @@ def desconectar(pasta=contas.PASTA):
     with contas._trava:
         (Path(pasta) / "telegram.json").unlink(missing_ok=True)
     return publico(pasta)
+
+
+PEDE_REPLY = "Responda (arrastar para o lado) à mensagem do corte com o link"
+
+
+def achar_corte(jobs, bot, chat_id, message_id):
+    """.json do corte cuja mensagem no Telegram (deste bot e chat) é message_id; None se nenhum."""
+    # ponytail: varre os .publicacao; índice em contas/telegram.json se ficar lento
+    for f in Path(jobs).glob("**/*.publicacao"):
+        try:
+            t = json.loads(f.read_text(encoding="utf-8")).get("telegram") or {}
+        except (OSError, ValueError):  # apagado ou corrompido no meio da varredura: não trava a escuta
+            continue
+        if t.get("bot") == bot and t.get("chat_id") == chat_id and message_id in (t.get("mensagens") or []):
+            return f.with_suffix(".json")
+    return None
+
+
+def _link_tiktok(texto):
+    for url in re.findall(r"https://\S+", texto):
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
+        if host == "tiktok.com" or host.endswith(".tiktok.com"):
+            return url
+    return None
+
+
+def _responder(token, chat_id, texto, http):
+    try:  # o que importa já foi gravado; resposta perdida não refaz o update
+        chamar(token, "sendMessage", {"chat_id": chat_id, "text": texto}, http=http)
+    except (OSError, ValueError) as e:
+        print(f"telegram: resposta não saiu ({type(e).__name__})", file=sys.stderr)
+
+
+def processar(update, jobs, http=None, pasta=contas.PASTA):
+    import publicar  # publicar importa telegram no topo
+    m = update.get("message") or {}
+    chat, texto = (m.get("chat") or {}).get("id"), m.get("text") or ""
+    d = conta(pasta)
+    if not d.get("token") or chat is None:
+        return
+    if not d.get("chat_id"):
+        with contas._trava:
+            d = conta(pasta)
+            if d.get("chat_id") or not d.get("pareamento") or texto.strip() != f"/start {d['pareamento']}":
+                return
+            d.pop("pareamento")
+            d.update(chat_id=chat, nome=(m.get("from") or m["chat"]).get("first_name"))
+            contas.salvar("telegram", d, pasta)
+        return _responder(d["token"], chat, "Pronto, os cortes aprovados vão chegar aqui", http)
+    link = _link_tiktok(texto)
+    if chat != d["chat_id"] or not link:  # outro chat ou conversa: silêncio
+        return
+    reply = (m.get("reply_to_message") or {}).get("message_id")
+    corte = reply and achar_corte(jobs, d.get("bot"), chat, reply)
+    if not corte:
+        return _responder(d["token"], chat, PEDE_REPLY, http)
+    try:
+        publicar.colar_link(corte, "tiktok", link)
+        titulo = json.loads(Path(corte).read_text(encoding="utf-8")).get("titulo") or Path(corte).stem
+        resposta = f"✓ link salvo em {titulo}"
+    except (OSError, ValueError) as e:
+        resposta = str(e)
+    _responder(d["token"], chat, resposta, http)
+
+
+def ouvir(jobs, http=None, pasta=contas.PASTA, dormir=time.sleep, continuar=lambda: True):
+    """Long polling enquanto continuar(): sem token espera; erro espera 1, 2, 4… até 60 s."""
+    espera = 1
+    while continuar():
+        token = conta(pasta).get("token")
+        if not token:
+            dormir(5)
+            continue
+        try:
+            dados = {"offset": conta(pasta).get("offset", 0), "timeout": 50, "allowed_updates": ["message"]}
+            for u in chamar(token, "getUpdates", dados, http=http, timeout=60) or []:
+                processar(u, jobs, http, pasta)
+                with contas._trava:
+                    d = conta(pasta)
+                    if d.get("token") == token:  # trocou de bot ou desconectou: o offset era do antigo
+                        d["offset"] = u["update_id"] + 1
+                        contas.salvar("telegram", d, pasta)
+            espera = 1
+        except Exception as e:  # noqa: BLE001 - a escuta não pode morrer; só o tipo (a mensagem pode ter o token)
+            print(f"telegram: escuta falhou ({type(e).__name__})", file=sys.stderr)
+            dormir(espera)
+            espera = min(espera * 2, 60)

@@ -89,3 +89,111 @@ def test_chamar_repassa_timeout(tmp_path):
     assert http.timeout == 70
     telegram.chamar(TOKEN, "sendVideo", arquivo=("video", mp4), http=http, timeout=90)
     assert http.timeout == 90
+
+
+OK = (200, {"ok": True, "result": {"message_id": 99}})
+
+
+def msg(texto, chat=7, reply=None, update_id=1):
+    m = {"message_id": 50, "chat": {"id": chat}, "from": {"first_name": "Gui"}, "text": texto}
+    if reply:
+        m["reply_to_message"] = {"message_id": reply}
+    return {"update_id": update_id, "message": m}
+
+
+def enviados(http):
+    return [c[2]["text"] for c in http.chamadas if c[1].endswith("/sendMessage")]
+
+
+@pytest.fixture
+def pareado(tmp_path):
+    p = tmp_path / "contas"
+    contas.salvar("telegram", {"token": TOKEN, "bot": "meu_bot", "chat_id": 7, "nome": "Gui"}, p)
+    return p
+
+
+def novo_corte(tmp_path, bot="meu_bot", tiktok=None):
+    job = tmp_path / "jobs" / "j1"
+    job.mkdir(parents=True)
+    arq = job / "c01.json"
+    arq.write_text(json.dumps({"arquivo": "c01.mp4", "titulo": "t"}), encoding="utf-8")
+    pub = {"plataformas": {"tiktok": tiktok or {"estado": "manual", "link": None, "erro": None, "em": None}},
+           "telegram": {"estado": "ok", "erro": None, "em": None, "mensagens": [10, 11], "bot": bot, "chat_id": 7}}
+    arq.with_suffix(".publicacao").write_text(json.dumps(pub), encoding="utf-8")
+    return arq
+
+
+def tiktok(corte_json):
+    return json.loads(corte_json.with_suffix(".publicacao").read_text(encoding="utf-8"))["plataformas"]["tiktok"]
+
+
+def test_start_com_codigo_pareia(tmp_path):
+    contas.salvar("telegram", {"token": TOKEN, "bot": "meu_bot", "pareamento": "abc"}, tmp_path)
+    http = Falso(OK)
+    telegram.processar(msg("/start abc"), tmp_path / "jobs", http, tmp_path)
+    d = telegram.conta(tmp_path)
+    assert d["chat_id"] == 7 and d["nome"] == "Gui" and "pareamento" not in d
+    assert enviados(http) == ["Pronto, os cortes aprovados vão chegar aqui"]
+
+
+def test_start_errado_ou_outro_chat_ignorado(tmp_path, pareado):
+    contas.salvar("telegram", {"token": TOKEN, "bot": "meu_bot", "pareamento": "abc"}, tmp_path)
+    http = Falso()
+    telegram.processar(msg("/start xyz"), tmp_path / "jobs", http, tmp_path)
+    assert "chat_id" not in telegram.conta(tmp_path) and http.chamadas == []
+    telegram.processar(msg("/start abc", chat=8), tmp_path / "jobs", http, pareado)
+    assert telegram.conta(pareado)["chat_id"] == 7 and http.chamadas == []
+
+
+def test_reply_com_link_salva_no_corte(tmp_path, pareado):
+    corte = novo_corte(tmp_path)
+    http = Falso(OK)
+    telegram.processar(msg("olha https://www.tiktok.com/@eu/video/1", reply=11), tmp_path / "jobs", http, pareado)
+    t = tiktok(corte)
+    assert t["estado"] == "ok" and t["link"] == "https://www.tiktok.com/@eu/video/1"
+    assert enviados(http) == ["✓ link salvo em t"]
+
+
+def test_reply_de_outro_bot_nao_salva(tmp_path, pareado):
+    corte = novo_corte(tmp_path, bot="velho")
+    http = Falso(OK)
+    telegram.processar(msg("https://www.tiktok.com/@eu/video/1", reply=11), tmp_path / "jobs", http, pareado)
+    assert tiktok(corte)["link"] is None
+    assert enviados(http) == ["Responda (arrastar para o lado) à mensagem do corte com o link"]
+
+
+def test_link_sem_reply_pede_reply(tmp_path, pareado):
+    novo_corte(tmp_path)
+    http = Falso(OK)
+    telegram.processar(msg("https://vm.tiktok.com/xyz"), tmp_path / "jobs", http, pareado)
+    assert enviados(http) == ["Responda (arrastar para o lado) à mensagem do corte com o link"]
+
+
+def test_link_repetido_responde_erro_do_colar_link(tmp_path, pareado):
+    corte = novo_corte(tmp_path, tiktok={"estado": "ok", "link": "https://www.tiktok.com/@eu/video/0",
+                                         "erro": None, "em": None})
+    antes = corte.with_suffix(".publicacao").read_bytes()
+    http = Falso(OK)
+    telegram.processar(msg("https://www.tiktok.com/@eu/video/1", reply=10), tmp_path / "jobs", http, pareado)
+    assert corte.with_suffix(".publicacao").read_bytes() == antes
+    assert enviados(http) == ["essa plataforma não espera link agora"]
+
+
+def test_ouvir_grava_offset_e_volta_apos_erro(tmp_path, pareado):
+    falso = Falso((200, {"ok": True, "result": [msg("oi", update_id=5)]}))
+    voltas, dormidas = [], []
+
+    def http(*a, **kw):
+        if not voltas[1:]:
+            raise OSError("caiu")
+        return falso(*a, **kw)
+
+    def continuar():
+        voltas.append(1)
+        return len(voltas) <= 2
+
+    telegram.ouvir(tmp_path / "jobs", http, pareado, dormidas.append, continuar)
+    assert telegram.conta(pareado)["offset"] == 6 and dormidas == [1]
+    _, url, dados, _, _ = falso.chamadas[0]
+    assert url.endswith("/getUpdates") and dados["timeout"] == 50 and dados["allowed_updates"] == ["message"]
+    assert falso.timeout == 60
