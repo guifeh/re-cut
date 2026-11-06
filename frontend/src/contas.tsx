@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { AlertTriangle, CheckCircle2, ChevronDown, Loader2 } from 'lucide-react'
 import { api, type ContaOAuth, type ContaTelegram } from '@/api'
@@ -42,6 +42,9 @@ export function Contas() {
   const [contas, setContas] = useState<(ContaOAuth | ContaTelegram)[] | null>(null)
   const carregar = () => api.contas().then(setContas).catch((e) => { setContas((c) => c ?? []); erroToast(e) })
 
+  // recarga do poll do Telegram: silenciosa (com o servidor fora não vira um toast a cada 3 s) e de identidade estável
+  const recarregar = useCallback(() => { api.contas().then(setContas).catch(() => {}) }, [])
+
   useEffect(() => {
     carregar()
     // volta do Google (/?aba=contas&erro=...): mostra o erro uma vez e limpa a URL
@@ -63,7 +66,7 @@ export function Contas() {
       <div className="grid items-start gap-4 lg:grid-cols-3">
         {contas === null && <p className="text-sm text-muted-foreground">Carregando…</p>}
         {contas?.map((c) => c.plataforma === 'telegram'
-          ? <CartaoTelegram key={c.plataforma} conta={c} onMudou={carregar} />
+          ? <CartaoTelegram key={c.plataforma} conta={c} onMudou={carregar} onPoll={recarregar} />
           : <CartaoConta key={c.plataforma} conta={c} onMudou={carregar} />)}
         <Card>
           <CardHeader>
@@ -227,7 +230,7 @@ function CartaoConta({ conta: c, onMudou }: { conta: ContaOAuth; onMudou: () => 
   )
 }
 
-function CartaoTelegram({ conta: c, onMudou }: { conta: ContaTelegram; onMudou: () => void }) {
+function CartaoTelegram({ conta: c, onMudou, onPoll }: { conta: ContaTelegram; onMudou: () => void; onPoll: () => void }) {
   const [token, setToken] = useState('')
   const [trocando, setTrocando] = useState(false)
   const [ocupado, setOcupado] = useState(false)
@@ -236,9 +239,9 @@ function CartaoTelegram({ conta: c, onMudou }: { conta: ContaTelegram; onMudou: 
   // aguardando o toque em Começar no Telegram: recarrega até conectar
   useEffect(() => {
     if (!aguardando) return
-    const t = setInterval(onMudou, 3000)
+    const t = setInterval(onPoll, 3000)
     return () => clearInterval(t)
-  }, [aguardando, onMudou])
+  }, [aguardando, onPoll])
 
   async function agir(fn: () => Promise<void>) {
     setOcupado(true)
@@ -295,6 +298,7 @@ function CartaoTelegram({ conta: c, onMudou }: { conta: ContaTelegram; onMudou: 
             </div>
             <Button type="submit" disabled={ocupado}>{ocupado && <Loader2 className="size-4 animate-spin" />} Salvar token</Button>
             {trocando && <Button type="button" variant="ghost" onClick={() => { setTrocando(false); setToken('') }}>Cancelar</Button>}
+            <p className="text-xs text-muted-foreground">Sem token? Veja o passo a passo em <code>docs/contas-passo-a-passo.md</code>, seção 4 (Telegram).</p>
           </form>
         )}
 
