@@ -460,9 +460,12 @@ class Handler(SimpleHTTPRequestHandler):
         with open(caminho, "rb") as f:
             f.seek(ini)
             restante = fim - ini + 1
-            while restante > 0 and (bloco := f.read(min(1 << 20, restante))):
-                self.wfile.write(bloco)
-                restante -= len(bloco)
+            try:
+                while restante > 0 and (bloco := f.read(min(1 << 20, restante))):
+                    self.wfile.write(bloco)
+                    restante -= len(bloco)
+            except ConnectionError:  # o <video> fecha a conexão ao pular/trocar de corte; não é erro
+                self.close_connection = True
 
     def do_POST(self):
         if not self.host_permitido():
