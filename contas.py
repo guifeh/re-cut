@@ -55,7 +55,7 @@ def requisitar(metodo, url, dados=None, cabecalhos=None, corpo=None, timeout=60)
 
 
 def _validar(plataforma):
-    if plataforma not in PLATAFORMAS:
+    if plataforma not in PLATAFORMAS + ("telegram",):  # telegram: conta do bot, sem OAuth
         raise ValueError(f"plataforma desconhecida: {plataforma}")
 
 
