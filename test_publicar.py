@@ -267,3 +267,126 @@ def test_plataforma_sem_estado_conta_como_ausente(corte):
     assert list(ler_publicacao(corte, set())["plataformas"]) == ["tiktok"]
     with pytest.raises(ValueError):
         tentar_de_novo(corte, "youtube", False)
+
+
+# --- Telegram ---
+
+def tg(result=None, status=200, **extra):
+    """Resposta da Bot API no formato do Falso."""
+    return (status, {"ok": True, "result": result} if status < 300 else {"ok": False, **extra})
+
+
+@pytest.fixture
+def pareado(pasta):
+    contas.salvar("telegram", {"token": TOKEN, "bot": "meu_bot", "chat_id": 7, "nome": "Gui"}, pasta)
+    return pasta
+
+
+def tg_estado(corte_json):
+    return ler_publicacao(corte_json, {(str(corte_json.resolve()), "telegram")})["telegram"]
+
+
+def test_aprovar_com_telegram_pareado(corte, pareado):
+    assert aprovar(corte, "x", [], pasta_contas=pareado) == ["youtube", "instagram", "telegram"]
+    t = tg_estado(corte)
+    assert t["estado"] == "enviando" and t["bot"] == "meu_bot" and t["chat_id"] == 7 and t["mensagens"] == []
+
+
+def test_aprovar_sem_telegram_igual_a_hoje(corte, pasta):
+    assert aprovar(corte, "x", [], pasta_contas=pasta) == ["youtube", "instagram"]
+    assert "telegram" not in ler_publicacao(corte, set())
+
+
+def test_telegram_envia_video_e_texto(corte, pareado):
+    aprovar(corte, "a < b & c", ["x"], pasta_contas=pareado)
+    http = Falso(tg({"message_id": 10}), tg({"message_id": 11}))
+    r = enviar(corte, "telegram", http=http, pasta_contas=pareado)
+    assert r["estado"] == "ok" and r["mensagens"] == [10, 11]
+    video, texto = http.chamadas
+    assert video["url"].endswith("/sendVideo") and b'name="caption"\r\n\r\nt\r\n' in video["corpo"]
+    assert texto["url"].endswith("/sendMessage") and texto["dados"]["parse_mode"] == "HTML"
+    assert texto["dados"]["chat_id"] == 7
+    assert texto["dados"]["text"] == "<pre>a &lt; b &amp; c\n\n#x</pre>"
+    assert tg_estado(corte)["mensagens"] == [10, 11]
+
+
+def test_telegram_legenda_do_video_com_nota(corte, pareado):
+    corte.write_text(json.dumps({"arquivo": "fonte_corte01.mp4", "titulo": "Gol", "nota": 8.5}))
+    aprovar(corte, "x", [], pasta_contas=pareado)
+    http = Falso(tg({"message_id": 10}), tg({"message_id": 11}))
+    enviar(corte, "telegram", http=http, pasta_contas=pareado)
+    assert "Gol · nota 8.5".encode() in http.chamadas[0]["corpo"]
+
+
+def test_telegram_texto_falha_reenvia_so_texto(corte, pareado):
+    aprovar(corte, "x", [], pasta_contas=pareado)
+    http = Falso(tg({"message_id": 10}), tg(status=400, description="Bad Request: text is too long"))
+    r = enviar(corte, "telegram", http=http, pasta_contas=pareado)
+    assert r["estado"] == "erro" and "too long" in r["erro"] and r["mensagens"] == [10]
+    tentar_de_novo(corte, "telegram", False, pasta_contas=pareado)
+    http = Falso(tg({"message_id": 12}))
+    r = enviar(corte, "telegram", http=http, pasta_contas=pareado)
+    assert r["estado"] == "ok" and r["mensagens"] == [10, 12]
+    assert [c["url"].rsplit("/", 1)[1] for c in http.chamadas] == ["sendMessage"]
+
+
+def test_telegram_429_espera_e_repete(corte, pareado):
+    aprovar(corte, "x", [], pasta_contas=pareado)
+    esperas = []
+    http = Falso(tg(status=429, description="Too Many Requests", parameters={"retry_after": 2}),
+                 tg({"message_id": 10}), tg({"message_id": 11}))
+    r = enviar(corte, "telegram", http=http, esperar=esperas.append, pasta_contas=pareado)
+    assert esperas == [2] and r["estado"] == "ok" and r["mensagens"] == [10, 11]
+
+
+def test_telegram_429_desiste_depois_de_3_repeticoes(corte, pareado):
+    aprovar(corte, "x", [], pasta_contas=pareado)
+    esperas = []
+    http = Falso(*[tg(status=429, description="Too Many Requests", parameters={"retry_after": 1})] * 4)
+    r = enviar(corte, "telegram", http=http, esperar=esperas.append, pasta_contas=pareado)
+    assert esperas == [1, 1, 1] and r["estado"] == "erro"
+
+
+def test_telegram_5xx_no_video_fica_incerto(corte, pareado):
+    aprovar(corte, "x", [], pasta_contas=pareado)
+    r = enviar(corte, "telegram", http=Falso(tg(status=502, description="Bad Gateway")), pasta_contas=pareado)
+    assert r["estado"] == "incerto" and "confira no Telegram" in r["erro"]
+    with pytest.raises(ValueError):
+        tentar_de_novo(corte, "telegram", False, pasta_contas=pareado)
+
+
+def test_telegram_video_grande_nao_tenta(corte, pareado, monkeypatch):
+    import publicar
+    monkeypatch.setattr(publicar, "LIMITE_TELEGRAM", 1000)
+    aprovar(corte, "x", [], pasta_contas=pareado)
+    http = Falso()
+    r = enviar(corte, "telegram", http=http, pasta_contas=pareado)
+    assert r["estado"] == "erro" and "aceita até 50 MB" in r["erro"] and http.chamadas == []
+
+
+def test_telegram_outro_bot_nao_reenvia(corte, pareado):
+    aprovar(corte, "x", [], pasta_contas=pareado)
+    enviar(corte, "telegram", http=Falso(tg(status=400, description="x")), pasta_contas=pareado)
+    contas.salvar("telegram", {"token": "OUTRO", "bot": "velho", "chat_id": 7}, pareado)
+    with pytest.raises(ValueError, match="outro bot"):
+        tentar_de_novo(corte, "telegram", False, pasta_contas=pareado)
+    assert tg_estado(corte)["estado"] == "erro"
+
+
+def test_telegram_erro_nao_vaza_token(corte, pareado):
+    aprovar(corte, "x", [], pasta_contas=pareado)
+    r = enviar(corte, "telegram", http=Falso(tg(status=401, description=f"token {TOKEN} inválido")),
+               pasta_contas=pareado)
+
+    def cai(*a, **kw):
+        raise OSError(f"falhou https://api.telegram.org/bot{TOKEN}/sendVideo")
+    assert r["estado"] == "erro" and TOKEN not in r["erro"]
+    tentar_de_novo(corte, "telegram", False, pasta_contas=pareado)
+    r = enviar(corte, "telegram", http=cai, pasta_contas=pareado)
+    assert r["estado"] == "incerto" and TOKEN not in r["erro"]
+    assert TOKEN not in corte.with_suffix(".publicacao").read_text(encoding="utf-8")
+
+
+def test_telegram_enviando_orfao_vira_incerto(corte, pareado):
+    aprovar(corte, "x", [], pasta_contas=pareado)
+    assert ler_publicacao(corte, set())["telegram"]["estado"] == "incerto"
