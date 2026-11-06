@@ -258,7 +258,7 @@ def aprovar_corte(job_dir, dados):
         raise ValueError("escreva a legenda")
     if not isinstance(hashtags, list) or not all(isinstance(h, str) for h in hashtags):
         raise ValueError("hashtags deve ser uma lista de textos")
-    _disparar(f, contas.PLATAFORMAS, lambda: publicar.aprovar(f, legenda, hashtags))
+    _disparar(f, contas.PLATAFORMAS, lambda: publicar.aprovar(f, legenda, hashtags, pasta_contas=contas.PASTA))
     return publicar.ler_publicacao(f, enviando_agora)
 
 
@@ -272,7 +272,7 @@ def mudar_publicacao(job_dir, dados):
     elif acao in ("tentar", "forcar"):
         if p not in contas.PLATAFORMAS:
             raise ValueError(f"o {p} é manual: cole o link do post")
-        _disparar(f, [p], lambda: publicar.tentar_de_novo(f, p, acao == "forcar") or [p])
+        _disparar(f, [p], lambda: publicar.tentar_de_novo(f, p, acao == "forcar", pasta_contas=contas.PASTA) or [p])
     else:
         raise ValueError("acao deve ser tentar, forcar ou link")
     return publicar.ler_publicacao(f, enviando_agora)

@@ -125,8 +125,8 @@ def test_consulta_logo_depois_de_aprovar_nao_vira_incerto(servidor, monkeypatch)
     chamadas = envio_falso(monkeypatch, liberar)
     original = publicar.aprovar
 
-    def aprovar_e_consultar(*a):  # uma consulta concorrente cai logo depois da gravação de "enviando"
-        r = original(*a)
+    def aprovar_e_consultar(*a, **kw):  # uma consulta concorrente cai logo depois da gravação de "enviando"
+        r = original(*a, **kw)
         publicar.ler_publicacao(a[0], server.enviando_agora)
         return r
     monkeypatch.setattr(publicar, "aprovar", aprovar_e_consultar)

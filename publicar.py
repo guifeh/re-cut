@@ -292,9 +292,9 @@ def _enviar_telegram(corte_json, http, esperar, pasta_contas):
         def passo(metodo, dados, arquivo=None, timeout=60):
             etapa[0] = "arriscada"  # daqui em diante a mensagem pode chegar mesmo que a resposta não volte
             r = _repetindo_429(lambda: telegram.chamar(tok, metodo, dados, arquivo, http, timeout), esperar)
-            etapa[0] = "antes"
             mensagens.append(r["message_id"])
             _mudar_telegram(corte_json, "enviando", mensagens=mensagens)  # gravado assim que volta
+            etapa[0] = "antes"  # só depois de gravar: senão um "erro" aqui reenviaria o que já chegou
 
         if not mensagens:
             meta = json.loads(Path(corte_json).read_text(encoding="utf-8"))
