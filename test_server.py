@@ -153,7 +153,7 @@ def test_tentar_de_novo_com_envio_ativo_e_recusado(servidor, monkeypatch):
 
 def test_tentar_de_novo_e_link(servidor, monkeypatch):
     chamadas = envio_falso(monkeypatch)
-    publicar.aprovar(corte(), "x", [])
+    publicar.aprovar(corte(), "x", [], pasta_contas=contas.PASTA)
     publicar._mudar(corte(), "youtube", "erro", erro="caiu")
     publicar._mudar(corte(), "instagram", "erro", erro="caiu")
     url = f"/api/jobs/{JID}/cortes/publicacao"
