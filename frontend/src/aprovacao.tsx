@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Check, Copy, Download, ExternalLink, Loader2, Plus, RotateCcw, Trash2 } from 'lucide-react'
-import { api, type Corte, type EstadoPlataforma, type Job, type Plataforma } from '@/api'
+import { api, type Corte, type EstadoPlataforma, type Job, type Plataforma, type Publicacao } from '@/api'
 import { Confirmar } from '@/lixeira'
 import { COR_PUBLICACAO, NOME_PLATAFORMA as NOME, PLATAFORMAS } from '@/plataformas'
 import { Button } from '@/components/ui/button'
@@ -78,9 +78,11 @@ function Esperando({ job, corte: c, onMudou }: { job: Job; corte: Corte; onMudou
   async function aprovar() {
     setFase('enviando') // desabilita já no clique; só volta se falhar
     try {
-      await api.aprovar(job.id, c.json, legenda, marcadas)
+      const r = await api.aprovar(job.id, c.json, legenda, marcadas)
       setFase('aprovado') // fica travado sem spinner até o próximo polling tirar o corte desta lista
-      toast.success('Aprovado: enviando para YouTube e Instagram', { description: 'O TikTok fica com você: baixe o vídeo e cole o link depois.' })
+      toast.success('Aprovado: enviando para YouTube e Instagram', {
+        description: r.telegram ? 'O TikTok foi para o seu Telegram: poste pelo celular e responda à mensagem com o link.' : 'O TikTok fica com você: baixe o vídeo e cole o link depois.',
+      })
       onMudou()
     } catch (e) {
       erroToast(e)
@@ -199,6 +201,7 @@ function Aprovado({ job, corte: c, onMudou }: { job: Job; corte: Corte; onMudou:
           const e = pub.plataformas?.[p]
           return e ? <LinhaPlataforma key={p} job={job} corte={c} plataforma={p} estado={e} texto={texto} onMudou={onMudou} /> : null
         })}
+        {pub.telegram && <LinhaTelegram job={job} corte={c} estado={pub.telegram} onMudou={onMudou} />}
       </ul>
     </article>
   )
@@ -290,6 +293,64 @@ function LinhaPlataforma({ job, corte: c, plataforma: p, estado: e, texto, onMud
             <Button variant="outline" size="sm" onClick={() => copiar(texto, 'Legenda')}><Copy className="size-3" /> Copiar legenda</Button>
           </div>
           <ColarLink plataforma={p} ocupado={ocupado} onSalvar={(l) => acao('link', l)} />
+        </>
+      )}
+    </li>
+  )
+}
+
+function LinhaTelegram({ job, corte: c, estado: e, onMudou }: {
+  job: Job; corte: Corte; estado: NonNullable<Publicacao['telegram']>; onMudou: () => void
+}) {
+  const [ocupado, setOcupado] = useState(false)
+  const [reenviar, setReenviar] = useState(false)
+
+  async function acao(a: 'tentar' | 'forcar') {
+    setOcupado(true)
+    try {
+      await api.publicacao(job.id, c.json, 'telegram', a)
+      toast.success('Enviando de novo para o Telegram')
+      setReenviar(false)
+      onMudou()
+    } catch (err) {
+      erroToast(err)
+    } finally {
+      setOcupado(false)
+    }
+  }
+
+  return (
+    <li className="flex flex-col gap-1.5 py-2 text-xs">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium">Telegram</span>
+        <span className={COR_PUBLICACAO[e.estado]}>
+          {e.estado === 'enviando' ? <span className="inline-flex items-center gap-1"><Loader2 className="size-3 animate-spin" /> enviando…</span>
+            : { ok: 'enviado', erro: 'erro', incerto: 'incerto' }[e.estado]}
+        </span>
+      </div>
+      {e.estado === 'erro' && (
+        <>
+          <p className="break-words text-destructive">{e.erro}</p>
+          <Button variant="outline" size="sm" className="self-start" disabled={ocupado} onClick={() => acao('tentar')}>
+            <RotateCcw className="size-3" /> Tentar de novo
+          </Button>
+        </>
+      )}
+      {e.estado === 'incerto' && (
+        <>
+          <p className="break-words text-muted-foreground">{e.erro ?? 'Não deu para confirmar o envio: confira no Telegram antes de enviar de novo.'}</p>
+          <Button variant="outline" size="sm" className="self-start" disabled={ocupado} onClick={() => setReenviar(true)}>
+            <RotateCcw className="size-3" /> Enviar mesmo assim
+          </Button>
+          <Confirmar
+            aberto={reenviar}
+            titulo="Enviar de novo para o Telegram?"
+            descricao="Se o primeiro envio chegou, o vídeo vai aparecer duas vezes no chat. Confira antes."
+            acao="Enviar mesmo assim"
+            perigo
+            onConfirmar={() => acao('forcar')}
+            onFechar={() => setReenviar(false)}
+          />
         </>
       )}
     </li>

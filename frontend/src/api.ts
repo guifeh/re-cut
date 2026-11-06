@@ -38,9 +38,20 @@ export type Publicacao = {
   legenda?: string
   hashtags?: string[]
   plataformas?: Partial<Record<Plataforma, EstadoPlataforma>>
+  /** ausente se o Telegram não estava pareado na aprovação */
+  telegram?: { estado: 'enviando' | 'ok' | 'erro' | 'incerto'; erro: string | null; em: string; mensagens: number[] }
 }
 
-export type Conta = {
+export type ContaTelegram = {
+  plataforma: 'telegram'
+  configurada: boolean
+  conectada: boolean
+  nome: string | null
+  bot?: string | null
+  link_pareamento?: string | null
+}
+export type Conta = ContaOAuth | ContaTelegram
+export type ContaOAuth = {
   plataforma: 'youtube' | 'instagram'
   configurada: boolean
   conectada: boolean
@@ -199,14 +210,16 @@ export const api = {
   resumoDoDia: () => req<ResumoDoDia>('/api/esteira/resumo'),
   aprovar: (jobId: string, json: string, legenda: string, hashtags: string[]) =>
     post<Publicacao>(`/api/jobs/${jobId}/cortes/aprovar`, { json, legenda, hashtags }),
-  publicacao: (jobId: string, json: string, plataforma: Plataforma, acao: 'tentar' | 'forcar' | 'link', link?: string) =>
+  publicacao: (jobId: string, json: string, plataforma: Plataforma | 'telegram', acao: 'tentar' | 'forcar' | 'link', link?: string) =>
     post<Publicacao>(`/api/jobs/${jobId}/cortes/publicacao`, { json, plataforma, acao, link }),
+  configurarTelegram: (token: string) => post<ContaTelegram>('/api/contas/telegram/configurar', { token }),
+  desconectarTelegram: () => post<ContaTelegram>('/api/contas/telegram/desconectar', {}),
   contas: () => req<Conta[]>('/api/contas'),
-  configurarConta: (p: Conta['plataforma'], client_id: string, client_secret: string) =>
+  configurarConta: (p: ContaOAuth['plataforma'], client_id: string, client_secret: string) =>
     post<Conta>(`/api/contas/${p}/configurar`, { client_id, client_secret }),
-  conectarConta: (p: Conta['plataforma']) => post<{ url: string }>(`/api/contas/${p}/conectar`, {}),
+  conectarConta: (p: ContaOAuth['plataforma']) => post<{ url: string }>(`/api/contas/${p}/conectar`, {}),
   codigoInstagram: (codigo: string) => post<Conta>('/api/contas/instagram/codigo', { codigo }),
-  desconectarConta: (p: Conta['plataforma']) => post<Conta>(`/api/contas/${p}/desconectar`, {}),
+  desconectarConta: (p: ContaOAuth['plataforma']) => post<Conta>(`/api/contas/${p}/desconectar`, {}),
   salvarTemplate: (t: Template) => post<Template>('/api/templates', t),
   aplicarTemplate: (jobId: string, template: string, cortes?: string[]) =>
     post<Job>(`/api/jobs/${jobId}/aplicar_template`, { template, cortes }),

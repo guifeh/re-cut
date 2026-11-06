@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { AlertTriangle, CheckCircle2, ChevronDown, Loader2 } from 'lucide-react'
-import { api, type Conta } from '@/api'
+import { api, type ContaOAuth, type ContaTelegram } from '@/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -12,7 +12,7 @@ import { NOME_PLATAFORMA } from '@/plataformas'
 const erroToast = (e: unknown) => toast.error((e as Error).message)
 
 // Resumo de docs/contas-passo-a-passo.md (a fonte); o guia completo fica nesse arquivo do repositório.
-const PASSOS: Record<Conta['plataforma'], { id: string; segredo: string; passos: string[] }> = {
+const PASSOS: Record<ContaOAuth['plataforma'], { id: string; segredo: string; passos: string[] }> = {
   youtube: {
     id: 'Client ID',
     segredo: 'Client secret',
@@ -39,7 +39,7 @@ const PASSOS: Record<Conta['plataforma'], { id: string; segredo: string; passos:
 }
 
 export function Contas() {
-  const [contas, setContas] = useState<Conta[] | null>(null)
+  const [contas, setContas] = useState<(ContaOAuth | ContaTelegram)[] | null>(null)
   const carregar = () => api.contas().then(setContas).catch((e) => { setContas((c) => c ?? []); erroToast(e) })
 
   useEffect(() => {
@@ -62,7 +62,9 @@ export function Contas() {
       </p>
       <div className="grid items-start gap-4 lg:grid-cols-3">
         {contas === null && <p className="text-sm text-muted-foreground">Carregando…</p>}
-        {contas?.map((c) => <CartaoConta key={c.plataforma} conta={c} onMudou={carregar} />)}
+        {contas?.map((c) => c.plataforma === 'telegram'
+          ? <CartaoTelegram key={c.plataforma} conta={c} onMudou={carregar} />
+          : <CartaoConta key={c.plataforma} conta={c} onMudou={carregar} />)}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">TikTok <Badge variant="outline">manual</Badge></CardTitle>
@@ -76,7 +78,7 @@ export function Contas() {
   )
 }
 
-function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void }) {
+function CartaoConta({ conta: c, onMudou }: { conta: ContaOAuth; onMudou: () => void }) {
   const info = PASSOS[c.plataforma]
   const nome = NOME_PLATAFORMA[c.plataforma]
   const [id, setId] = useState('')
@@ -219,6 +221,110 @@ function CartaoConta({ conta: c, onMudou }: { conta: Conta; onMudou: () => void 
           <ol className="mt-2 flex list-decimal flex-col gap-1.5 pl-5 text-muted-foreground">
             {info.passos.map((p) => <li key={p}>{p}</li>)}
           </ol>
+        </details>
+      </CardContent>
+    </Card>
+  )
+}
+
+function CartaoTelegram({ conta: c, onMudou }: { conta: ContaTelegram; onMudou: () => void }) {
+  const [token, setToken] = useState('')
+  const [trocando, setTrocando] = useState(false)
+  const [ocupado, setOcupado] = useState(false)
+  const aguardando = c.configurada && !c.conectada
+
+  // aguardando o toque em Começar no Telegram: recarrega até conectar
+  useEffect(() => {
+    if (!aguardando) return
+    const t = setInterval(onMudou, 3000)
+    return () => clearInterval(t)
+  }, [aguardando, onMudou])
+
+  async function agir(fn: () => Promise<void>) {
+    setOcupado(true)
+    try {
+      await fn()
+    } catch (e) {
+      erroToast(e)
+    } finally {
+      setOcupado(false)
+    }
+  }
+
+  const salvar = (e: React.FormEvent) => {
+    e.preventDefault()
+    return agir(async () => {
+      await api.configurarTelegram(token.trim())
+      setToken('')
+      setTrocando(false)
+      toast.success('Telegram: token salvo')
+      onMudou()
+    })
+  }
+
+  const desconectar = () =>
+    agir(async () => {
+      await api.desconectarTelegram()
+      toast('Telegram desconectado')
+      onMudou()
+    })
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          Telegram <Badge variant="outline">opcional</Badge>
+          {c.conectada ? (
+            <Badge variant="secondary" className="text-emerald-400"><CheckCircle2 className="size-3" /> Conectado</Badge>
+          ) : (
+            <Badge variant="outline">{aguardando ? 'Aguardando' : 'Não configurado'}</Badge>
+          )}
+        </CardTitle>
+        <CardDescription>
+          {c.conectada
+            ? `Conectado como ${c.nome ?? 'você'}${c.bot ? ` (@${c.bot})` : ''}`
+            : 'O bot leva o vídeo e o texto de cada corte aprovado para o seu Telegram, para postar no TikTok pelo celular.'}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {(!c.configurada || trocando) && (
+          <form onSubmit={salvar} className="flex flex-col gap-3">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="telegram-token">Token do bot</Label>
+              <Input id="telegram-token" type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="new-password" required />
+            </div>
+            <Button type="submit" disabled={ocupado}>{ocupado && <Loader2 className="size-4 animate-spin" />} Salvar token</Button>
+            {trocando && <Button type="button" variant="ghost" onClick={() => { setTrocando(false); setToken('') }}>Cancelar</Button>}
+          </form>
+        )}
+
+        {aguardando && !trocando && c.link_pareamento && (
+          <>
+            <Button render={<a href={c.link_pareamento} target="_blank" rel="noopener noreferrer" />} nativeButton={false}>Abrir no Telegram</Button>
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="size-3 animate-spin" /> Toque em Começar no Telegram; esta tela atualiza sozinha.
+            </p>
+          </>
+        )}
+
+        {c.configurada && !trocando && (
+          <div className="flex gap-2">
+            {c.conectada && <Button variant="outline" onClick={desconectar} disabled={ocupado}>Desconectar</Button>}
+            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setTrocando(true)}>Trocar token</Button>
+          </div>
+        )}
+
+        <details className="group text-sm">
+          <summary className="flex cursor-pointer list-none items-center gap-1 text-muted-foreground hover:text-foreground">
+            <ChevronDown className="size-4 transition-transform group-open:rotate-180" /> Como conseguir o token
+          </summary>
+          <ol className="mt-2 flex list-decimal flex-col gap-1.5 pl-5 text-muted-foreground">
+            <li>No Telegram, abra o @BotFather e envie /newbot. Escolha um nome e um usuário (termina em bot).</li>
+            <li>Copie o token que ele devolve (parece 123456:ABC...) e cole acima. Não compartilhe.</li>
+            <li>Clique em Abrir no Telegram e toque em Começar.</li>
+            <li>Aprove um corte, poste no TikTok pelo celular e responda à mensagem do corte com o link do post: o re-cut salva o link.</li>
+          </ol>
+          <p className="mt-2 text-xs text-muted-foreground">Vídeos acima de 50 MB não passam pelo bot (use Baixar no painel). Só cortes aprovados depois de conectar chegam. Guia: <code>docs/contas-passo-a-passo.md</code>, seção 4.</p>
         </details>
       </CardContent>
     </Card>
