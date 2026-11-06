@@ -465,7 +465,7 @@ class Handler(SimpleHTTPRequestHandler):
                     self.wfile.write(bloco)
                     restante -= len(bloco)
             except ConnectionError:  # o <video> fecha a conexão ao pular/trocar de corte; não é erro
-                pass
+                self.close_connection = True
 
     def do_POST(self):
         if not self.host_permitido():

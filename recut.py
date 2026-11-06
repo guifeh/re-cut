@@ -476,25 +476,23 @@ def energia_relativa(rms, inicio, fim):
     return statistics.fmean(trecho) / mediana
 
 
-def resumo_da_regra(sugeridos, cortes, duracao, cfg):
-    """Quantos cortes a IA sugeriu e por que cada um ficou de fora (nota baixa, duração, limite)."""
-    nota = sum(c["nota"] < cfg["nota_min"] for c in sugeridos)
-    dur = sum(c["nota"] >= cfg["nota_min"] and not cfg["dur_min"] <= min(duracao, c["fim"]) - max(0.0, c["inicio"]) <= cfg["dur_max"]
-              for c in sugeridos)
-    limite = len(sugeridos) - nota - dur - len(cortes)
-    fora = [f"{n} {motivo}" for n, motivo in [(nota, f"com nota abaixo de {cfg['nota_min']:g}"),
-            (dur, f"fora de {cfg['dur_min']}-{cfg['dur_max']}s"), (limite, f"acima do limite de {cfg['limite']}")] if n]
-    return f"IA sugeriu {len(sugeridos)} cortes, ficaram {len(cortes)}" + (f" (descartados: {', '.join(fora)})" if fora else "")
-
-
 def aplicar_regra(cortes, duracao, nota_min, dur_min, dur_max, limite):
-    """Regra do lote: limites de duração, nota mínima, ordem pela nota, limite por lote."""
-    ok = []
+    """Regra do lote: limites de duração, nota mínima, ordem pela nota, limite por lote.
+    Devolve os cortes que ficam e uma frase com quantos a IA sugeriu e por que os outros caíram."""
+    ok, nota_baixa, fora_dur = [], 0, 0
     for c in cortes:
         c = {**c, "inicio": max(0.0, c["inicio"]), "fim": min(duracao, c["fim"])}
-        if c["nota"] >= nota_min and dur_min <= c["fim"] - c["inicio"] <= dur_max:
+        if c["nota"] < nota_min:
+            nota_baixa += 1
+        elif not dur_min <= c["fim"] - c["inicio"] <= dur_max:
+            fora_dur += 1
+        else:
             ok.append(c)
-    return sorted(ok, key=lambda c: -c["nota"])[:limite]
+    ficam = sorted(ok, key=lambda c: -c["nota"])[:limite]
+    motivos = [(nota_baixa, f"com nota abaixo de {nota_min:g}"), (fora_dur, f"fora de {dur_min:g}-{dur_max:g}s"),
+               (len(ok) - len(ficam), f"acima do limite de {limite}")]
+    fora = ", ".join(f"{n} {motivo}" for n, motivo in motivos if n)
+    return ficam, f"IA sugeriu {len(cortes)}, ficaram {len(ficam)}" + (f" (descartados: {fora})" if fora else "")
 
 
 def no_horario(agora, dias, horas):
@@ -888,9 +886,9 @@ def processar(video, saida, prefixo, cfg):
     rms = rms_por_segundo(video)
     transcricao = "\n".join(f"[{s:.1f}-{e:.1f}] (energia {energia_relativa(rms, s, e):.1f}x) {t}" for s, e, t in segs)
     print(f"[{prefixo}] analisando {len(segs)} falas com a IA")
-    sugeridos = escolher_cortes(transcricao, cfg, prefixo)
-    cortes = aplicar_regra(sugeridos, len(rms), cfg["nota_min"], cfg["dur_min"], cfg["dur_max"], cfg["limite"])
-    print(f"[{prefixo}] {resumo_da_regra(sugeridos, cortes, len(rms), cfg)}")
+    cortes, regra = aplicar_regra(escolher_cortes(transcricao, cfg, prefixo), len(rms), cfg["nota_min"],
+                                  cfg["dur_min"], cfg["dur_max"], cfg["limite"])
+    print(f"[{prefixo}] {regra}")
     feitos = []
     if cortes:
         marcar("renderizar", "inicio", prefixo, n=len(cortes), msg=f"Renderizando {len(cortes)} cortes")
@@ -911,7 +909,7 @@ def processar(video, saida, prefixo, cfg):
     if cortes:
         marcar("renderizar", "fim", prefixo, n=len(cortes), msg=f"{len(cortes)} cortes renderizados")
     # depois de renderizar: o cartão do item termina em Ranking, e Ranking só fica verde com os cortes prontos
-    marcar("ranking", "fim", prefixo, n=len(cortes), msg=f"{len(cortes)} cortes aprovados pela regra")
+    marcar("ranking", "fim", prefixo, n=len(cortes), msg=regra)
     return feitos
 
 
