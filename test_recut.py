@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from recut import (agentes_disponiveis, agrupar_palavras, aplicar_regra, carregar_estrategia, carregar_template,
+from recut import (agentes_disponiveis, agrupar_palavras, aplicar_regra, resumo_da_regra, carregar_estrategia, carregar_template,
                    comandos_crop, cor_ass, energia_relativa, extrair_json, filtro_video, legenda_ass, no_horario,
                    baixar, limpar_legendas, marcar, marcar_erro, normalizar_template, PREFIXO_EVENTO, recorte_vertical, slug, suavizar_trajetoria, ts_ass)
 
@@ -340,3 +340,13 @@ def test_processar_marca_ranking_depois_de_renderizar(monkeypatch, tmp_path, cap
     recut.processar(tmp_path / "lote_0000.ts", tmp_path, "lote_0000", cfg)
     passos = [(e["etapa"], e["estado"]) for e in _eventos(capsys.readouterr().out)]
     assert passos[-3:] == [("renderizar", "progresso"), ("renderizar", "fim"), ("ranking", "fim")]
+
+
+def test_resumo_da_regra():
+    cfg = {"nota_min": 6, "dur_min": 15, "dur_max": 90, "limite": 1}
+    sugeridos = [{"inicio": 0, "fim": 20, "nota": 9}, {"inicio": 30, "fim": 50, "nota": 7},
+                 {"inicio": 60, "fim": 65, "nota": 8}, {"inicio": 70, "fim": 90, "nota": 4}]
+    cortes = aplicar_regra(sugeridos, 300, 6, 15, 90, 1)
+    assert resumo_da_regra(sugeridos, cortes, 300, cfg) == (
+        "IA sugeriu 4 cortes, ficaram 1 (descartados: 1 com nota abaixo de 6, 1 fora de 15-90s, 1 acima do limite de 1)")
+    assert resumo_da_regra(cortes, cortes, 300, cfg) == "IA sugeriu 1 cortes, ficaram 1"

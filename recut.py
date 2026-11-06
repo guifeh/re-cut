@@ -476,6 +476,17 @@ def energia_relativa(rms, inicio, fim):
     return statistics.fmean(trecho) / mediana
 
 
+def resumo_da_regra(sugeridos, cortes, duracao, cfg):
+    """Quantos cortes a IA sugeriu e por que cada um ficou de fora (nota baixa, duração, limite)."""
+    nota = sum(c["nota"] < cfg["nota_min"] for c in sugeridos)
+    dur = sum(c["nota"] >= cfg["nota_min"] and not cfg["dur_min"] <= min(duracao, c["fim"]) - max(0.0, c["inicio"]) <= cfg["dur_max"]
+              for c in sugeridos)
+    limite = len(sugeridos) - nota - dur - len(cortes)
+    fora = [f"{n} {motivo}" for n, motivo in [(nota, f"com nota abaixo de {cfg['nota_min']:g}"),
+            (dur, f"fora de {cfg['dur_min']}-{cfg['dur_max']}s"), (limite, f"acima do limite de {cfg['limite']}")] if n]
+    return f"IA sugeriu {len(sugeridos)} cortes, ficaram {len(cortes)}" + (f" (descartados: {', '.join(fora)})" if fora else "")
+
+
 def aplicar_regra(cortes, duracao, nota_min, dur_min, dur_max, limite):
     """Regra do lote: limites de duração, nota mínima, ordem pela nota, limite por lote."""
     ok = []
@@ -877,8 +888,9 @@ def processar(video, saida, prefixo, cfg):
     rms = rms_por_segundo(video)
     transcricao = "\n".join(f"[{s:.1f}-{e:.1f}] (energia {energia_relativa(rms, s, e):.1f}x) {t}" for s, e, t in segs)
     print(f"[{prefixo}] analisando {len(segs)} falas com a IA")
-    cortes = aplicar_regra(escolher_cortes(transcricao, cfg, prefixo), len(rms), cfg["nota_min"],
-                           cfg["dur_min"], cfg["dur_max"], cfg["limite"])
+    sugeridos = escolher_cortes(transcricao, cfg, prefixo)
+    cortes = aplicar_regra(sugeridos, len(rms), cfg["nota_min"], cfg["dur_min"], cfg["dur_max"], cfg["limite"])
+    print(f"[{prefixo}] {resumo_da_regra(sugeridos, cortes, len(rms), cfg)}")
     feitos = []
     if cortes:
         marcar("renderizar", "inicio", prefixo, n=len(cortes), msg=f"Renderizando {len(cortes)} cortes")
