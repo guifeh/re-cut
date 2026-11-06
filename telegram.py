@@ -35,9 +35,9 @@ def chamar(token, metodo, dados=None, arquivo=None, http=None, timeout=60):
     try:
         if arquivo:
             tipo, corpo = _multipart(dados, *arquivo)
-            status, _, resp = http("POST", url, None, {"Content-Type": tipo}, corpo)
+            status, _, resp = http("POST", url, None, {"Content-Type": tipo}, corpo, timeout)
         else:
-            status, _, resp = http("POST", url, dados or {}, {"Content-Type": "application/json"})
+            status, _, resp = http("POST", url, dados or {}, {"Content-Type": "application/json"}, timeout=timeout)
     except OSError as e:
         raise OSError(str(e).replace(token, "***")) from None
     try:

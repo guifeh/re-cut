@@ -11,8 +11,9 @@ class Falso:
     def __init__(self, *respostas):
         self.respostas, self.chamadas = list(respostas), []
 
-    def __call__(self, metodo, url, dados=None, cabecalhos=None, corpo=None):
+    def __call__(self, metodo, url, dados=None, cabecalhos=None, corpo=None, timeout=60):
         self.chamadas.append((metodo, url, dados, cabecalhos, corpo))
+        self.timeout = timeout
         status, obj = self.respostas.pop(0)
         return status, {}, json.dumps(obj).encode()
 
@@ -78,3 +79,13 @@ def test_publico_nunca_tem_token(tmp_path):
     telegram.configurar(TOKEN, Falso((200, {"ok": True, "result": {"username": "b"}})), tmp_path)
     assert "token" not in json.dumps(telegram.publico(tmp_path)).replace("link_pareamento", "")
     assert "SEGREDO" not in json.dumps(telegram.publico(tmp_path))
+
+
+def test_chamar_repassa_timeout(tmp_path):
+    mp4 = tmp_path / "c.mp4"
+    mp4.write_bytes(b"x")
+    http = Falso((200, {"ok": True, "result": []}), (200, {"ok": True, "result": {}}))
+    telegram.chamar(TOKEN, "getUpdates", {"timeout": 50}, http=http, timeout=70)
+    assert http.timeout == 70
+    telegram.chamar(TOKEN, "sendVideo", arquivo=("video", mp4), http=http, timeout=90)
+    assert http.timeout == 90
