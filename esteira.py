@@ -132,6 +132,11 @@ def _feed_publicacao(aprovados):
             else:
                 continue
             linhas.append({"t": x["em"], "etapa": p, "msg": f"{msg} · {nome}", "estado": "fim" if est == "ok" else "erro"})
+        tg = pub.get("telegram") or {}  # fora de `plataformas`: sem nó próprio, entra na etapa do TikTok
+        if tg.get("em") and tg.get("estado") in ("ok", "erro", "incerto"):
+            ok = tg["estado"] == "ok"
+            msg = "Enviado ao Telegram" if ok else f"Telegram: {tg.get('erro') or tg['estado']}"
+            linhas.append({"t": tg["em"], "etapa": "tiktok", "msg": f"{msg} · {nome}", "estado": "fim" if ok else "erro"})
     return linhas
 
 

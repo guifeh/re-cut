@@ -138,6 +138,16 @@ def test_feed_mostra_aprovacao_e_publicacao_na_ordem():
     ]
 
 
+def test_feed_mostra_envio_ao_telegram():
+    def feed(tg):
+        pub = {"aprovado_em": "2026-11-04T10:01:00", "plataformas": {}, "telegram": tg}
+        return [(f["etapa"], f["msg"], f["estado"]) for f in
+                estado([], vivo=False, cortes=[{"nome": "c", "titulo": "Gol", "nota": 8, "publicacao": pub}])["feed"]][:-1]
+    assert feed({"estado": "ok", "em": "2026-11-04T10:02:00"}) == [("tiktok", "Enviado ao Telegram · Gol", "fim")]
+    assert feed({"estado": "incerto", "erro": "confira", "em": "2026-11-04T10:02:00"}) == [("tiktok", "Telegram: confira · Gol", "erro")]
+    assert feed({"estado": "enviando", "em": "2026-11-04T10:02:00"}) == []
+
+
 def test_feed_com_publicacao_continua_limitado_a_50():
     pub = {"aprovado_em": "2026-11-04T23:00:00", "plataformas": {"youtube": {"estado": "ok", "em": "2026-11-04T23:01:00"}}}
     evs = [ev("ia", "fim", str(i)) for i in range(60)]
