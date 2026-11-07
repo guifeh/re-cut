@@ -166,6 +166,7 @@ export type NovoJob = {
   horas?: number[]
   webhook?: string
   template?: string
+  gameplay?: boolean
 }
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {

@@ -19,6 +19,7 @@ entrada ──► transcrição ──► análise ──► regra do lote ─�
 - **Efeitos automáticos:** na mesma análise, a IA marca dentro de cada corte os momentos de `risada`, `reacao`, `enfase`, `punchline` e `virada` (com intensidade de 1 a 3 e um emoji). O template decide o que acontece em cada tipo: **zoom no rosto** (punch-in rápido mirando a altura do rosto), **som** (efeitos em `efeitos/`), **emoji** (figurinha que salta na tela) e **flash** (clarão de transição). No cut.pro isso aparece como recursos do template (`auto_zoom`, `emojis`, efeitos sonoros da biblioteca); aqui as regras por tipo de momento ficam visíveis e editáveis. A biblioteca de sons é organizada por categoria em `efeitos/<categoria>/<nome>.wav|mp3`, como a do cut.pro; os padrão (`transicao/whoosh`, `impacto/boom`, `cartoon/pop`, `interface/ding`, `comedia/ba-dum-tss`) são gerados pelo ffmpeg na primeira vez. Para usar os seus, crie uma pasta de categoria em `efeitos/` (nomes em minúsculas, números e hífen; arquivos soltos na raiz entram como "geral") e escolha no template. O zoom mira o rosto no instante do momento em qualquer enquadramento.
 - **Lixeira (safe-delete):** excluir um corte ou um vídeo inteiro nunca apaga na hora: move para `lixeira/`, onde fica 30 dias (`RECUT_LIXEIRA_DIAS`) e pode ser restaurado. O vídeo vai com os cortes e com o arquivo enviado (se nenhum outro vídeo usar o mesmo upload). Cada ação (excluído, restaurado, apagado de vez, expirado) fica em `lixeira/registro.jsonl` com data, hora e o vídeo afetado, e aparece no histórico da aba Lixeira. Não dá para excluir um vídeo que ainda está processando.
 - **Estratégias:** instruções em linguagem natural ("foque em dicas práticas de até 60s") salvas em `estrategias/<nome>.txt` e reutilizadas.
+- **Gameplay:** para gravações de jogo em terceira pessoa (ex.: GTA), o interruptor "Vídeo gameplay" / "Live gameplay" (`--gameplay`) divide a tela: a facecam do streamer em cima e o meio da tela, onde fica o personagem, embaixo. A facecam é achada sozinha (o rosto que fica parado no mesmo lugar; personagens do jogo andam pela tela) e, nos trechos sem ela (zoom da edição, tela de celular), o gameplay ocupa a tela toda. Em risada e reação o zoom mira a facecam. Trocar o template do corte mantém o layout.
 - **Enquadramento:** detecta o rosto a cada 0,5 s e move o recorte com suavização (mediana + zona morta + pan gradual).
 - **Eventos:** webhook opcional recebe `live_started`, `live_clips` (a cada lote) e `live_ended`.
 
@@ -84,6 +85,7 @@ Para desenvolver o frontend com hot reload: `python server.py` em um terminal e 
 
 ```bash
 python recut.py video.mp4
+python recut.py https://www.youtube.com/watch?v=... --gameplay   # jogo: facecam em cima, personagem embaixo
 python recut.py https://www.youtube.com/watch?v=...
 python recut.py https://www.twitch.tv/canal --monitorar --dias 1,2,3,4,5 --horas 18,19,20,21,22,23 \
     --estrategia reacoes --limite-por-lote 3 --nota-min 7 --webhook https://meu.app/hook --template destaque

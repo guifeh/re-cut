@@ -340,3 +340,58 @@ def test_processar_marca_ranking_depois_de_renderizar(monkeypatch, tmp_path, cap
     recut.processar(tmp_path / "lote_0000.ts", tmp_path, "lote_0000", cfg)
     passos = [(e["etapa"], e["estado"]) for e in _eventos(capsys.readouterr().out)]
     assert passos[-3:] == [("renderizar", "progresso"), ("renderizar", "fim"), ("ranking", "fim")]
+
+
+# ---------- layout de jogo (facecam em cima, personagem embaixo) ----------
+
+from recut import achar_facecam, ancora_gameplay, caixa_facecam, filtro_gameplay, paineis_gameplay, trechos_facecam
+
+
+def test_achar_facecam_prefere_rosto_parado_no_canto():
+    iw, ih = 1920, 1080
+    cam = (100, 60, 200, 200)  # facecam no canto superior esquerdo, sempre no mesmo lugar
+    amostras = []
+    for i in range(20):
+        rostos = [cam] if i % 4 else []  # o detector falha às vezes
+        rostos.append((600 + i * 40, 400, 150, 150))  # personagem andando pela tela
+        amostras.append(rostos)
+    fc = achar_facecam(amostras, iw, ih)
+    assert fc and abs(fc["cx"] - 200) < 1 and abs(fc["cy"] - 160) < 1
+    assert len(fc["amostras"]) == 15
+
+
+def test_achar_facecam_ignora_camera_em_tela_cheia_e_vazio():
+    assert achar_facecam([[]] * 10, 1920, 1080) is None
+    assert achar_facecam([[(700, 100, 500, 500)]] * 10, 1920, 1080) is None  # rosto enorme: câmera em tela cheia
+
+
+def test_trechos_facecam_preenche_buracos_e_descarta_piscadas():
+    # 0-10s presente com buraco de 2s, sumida até 25s, uma piscada isolada aos 20s
+    indices = [i for i in range(21) if not 8 <= i <= 11] + [40]
+    assert trechos_facecam(indices, 60, 0.5) == [(0.0, 10.25)]
+    assert trechos_facecam(list(range(60)), 60, 0.5) == [(0.0, 30.0)]
+    assert trechos_facecam([], 60, 0.5) == []
+
+
+def test_caixa_facecam_fica_dentro_do_quadro_na_proporcao():
+    x, y, w, h = caixa_facecam(150, 100, 200, 1920, 1080, 1080 / 672)
+    assert x == 0 and y == 0 and w % 2 == 0 and h % 2 == 0
+    assert abs(w / h - 1080 / 672) < 0.02
+
+
+def test_filtro_gameplay_alterna_layout_pelos_trechos():
+    sem_cam = filtro_gameplay(1920, 1080, 1080, 1920)
+    assert sem_cam.startswith("[0:v]crop=606:1080:657:0") and "vstack" not in sem_cam
+    sempre = filtro_gameplay(1920, 1080, 1080, 1920, (0, 0, 400, 248), [(0.0, 30.0)], 30.0)
+    assert "vstack" in sempre and "overlay" not in sempre
+    parte = filtro_gameplay(1920, 1080, 1080, 1920, (0, 0, 400, 248), [(0.0, 10.0), (20.0, 30.0)], 30.0)
+    assert "enable='between(t\,0.00\,10.00)+between(t\,20.00\,30.00)'" in parte
+    assert filtro_gameplay(1080, 1920, 1080, 1920) is None  # fonte vertical: não há o que dividir
+
+
+def test_ancora_gameplay_reacao_mira_a_facecam():
+    hf, hg = paineis_gameplay(1920)
+    assert hf + hg == 1920
+    assert ancora_gameplay(5, "reacao", [(0, 10)], 1920) == (0.5, round(hf / 2 / 1920, 3))
+    assert ancora_gameplay(5, "enfase", [(0, 10)], 1920)[1] > 0.5
+    assert ancora_gameplay(15, "reacao", [(0, 10)], 1920) == (0.5, 0.5)
