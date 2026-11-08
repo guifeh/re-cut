@@ -111,23 +111,83 @@ def texto_final(legenda, hashtags):
 
 
 def aprovar(corte_json, legenda, hashtags, pasta_contas=contas.PASTA):
-    """Grava a escolha e marca YouTube/Instagram (e o Telegram, se pareado) como "enviando"; devolve o que o
-    servidor envia."""
+    """Aprova os destinos ainda ausentes, preservando os envios individuais feitos pela grade."""
     try:
         tg = telegram.conta(pasta_contas)
     except (OSError, ValueError):  # conta ilegível: Telegram não atrapalha YouTube/Instagram
         tg = {}
     pareado = bool(tg.get("token") and tg.get("chat_id"))
     with _trava:
-        if _ler(corte_json).get("aprovado_em"):
+        pub = _ler(corte_json)
+        if pub.get("aprovado_em"):
             raise ValueError("esse corte já foi aprovado")
-        pub = {"aprovado_em": _agora(), "legenda": legenda, "hashtags": list(hashtags),
-               "plataformas": {**{p: _estado("enviando") for p in contas.PLATAFORMAS}, "tiktok": _estado("manual")}}
-        if pareado:
+        pub.update(aprovado_em=_agora(), legenda=legenda, hashtags=list(hashtags))
+        plataformas = pub.setdefault("plataformas", {})
+        pendentes = [p for p in contas.PLATAFORMAS if p not in plataformas]
+        plataformas.update({p: _estado("enviando") for p in pendentes})
+        plataformas.setdefault("tiktok", _estado("manual"))
+        if pareado and not pub.get("telegram"):
             pub["telegram"] = {"estado": "enviando", "erro": None, "em": _agora(), "mensagens": [],
                                "bot": tg.get("bot"), "chat_id": tg["chat_id"]}
+            pendentes.append("telegram")
         recut.gravar_json(_arquivo(corte_json), pub)
-    return list(contas.PLATAFORMAS) + (["telegram"] if pareado else [])
+    return pendentes
+
+
+def data_publicacao(valor):
+    """Data futura ISO 8601 com fuso explícito, normalizada para UTC."""
+    try:
+        data = dt.datetime.fromisoformat(valor.replace("Z", "+00:00"))
+        if data.utcoffset() is None or data <= dt.datetime.now(dt.timezone.utc):
+            raise ValueError
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        raise ValueError("escolha uma data futura com fuso horário para publicar") from None
+    return data.astimezone(dt.timezone.utc).isoformat()
+
+
+def preparar_envio(corte_json, plataforma, publish_at=None, forcar=False, pasta_contas=contas.PASTA):
+    """Autoriza apenas o destino escolhido na grade, preservando os outros envios."""
+    if plataforma not in ("youtube", "telegram"):
+        raise ValueError("escolha YouTube ou Telegram")
+    if publish_at is not None:
+        if plataforma != "youtube":
+            raise ValueError("o agendamento está disponível para o YouTube")
+        publish_at = data_publicacao(publish_at)
+    meta = json.loads(Path(corte_json).read_text(encoding="utf-8"))
+    video = Path(corte_json).with_name(meta["arquivo"])
+    if not video.is_file() or not video.stat().st_size:
+        raise ValueError("o vídeo ainda não está pronto")
+    conta = contas.ler(plataforma, pasta_contas)
+    if plataforma == "telegram":
+        if not conta.get("token") or not conta.get("chat_id"):
+            raise ValueError("conecte o Telegram na aba Contas")
+        if video.stat().st_size > LIMITE_TELEGRAM:
+            raise ValueError("o Telegram aceita vídeos de até 50 MB; use Baixar")
+    elif not conta.get("refresh_token") and not conta.get("access_token"):
+        raise ValueError("conecte o YouTube na aba Contas")
+    with _trava:
+        pub = _ler(corte_json)
+        anterior = pub.get("telegram", {}) if plataforma == "telegram" else pub.get("plataformas", {}).get(plataforma, {})
+        if anterior.get("estado") == "enviando":
+            raise ValueError("esse corte já está sendo enviado; espere terminar")
+        if anterior.get("estado") in ("ok", "incerto") and not forcar:
+            raise ValueError("confirme o reenvio: esse corte pode já ter sido enviado")
+        historico = list(anterior.get("historico", []))
+        if anterior and anterior.get("estado") in ("ok", "incerto"):
+            historico.append({k: v for k, v in anterior.items() if k != "historico"})
+        novo = {"estado": "enviando", "erro": None, "em": _agora(), "historico": historico}
+        if plataforma == "telegram":
+            mesmas_contas = (anterior.get("bot"), anterior.get("chat_id")) == (conta.get("bot"), conta["chat_id"])
+            mensagens = anterior.get("mensagens", []) if anterior.get("estado") == "erro" and mesmas_contas else []
+            pub["telegram"] = {**novo, "mensagens": mensagens, "bot": conta.get("bot"), "chat_id": conta["chat_id"]}
+        else:
+            pub.setdefault("plataformas", {})["youtube"] = {
+                **_estado("enviando"), **novo, "publish_at": publish_at, "titulo": meta.get("titulo")}
+        pub.setdefault("plataformas", {}).setdefault("tiktok", _estado("manual"))
+        pub.setdefault("legenda", (meta.get("legendas") or [meta.get("descricao") or meta.get("titulo") or video.stem])[0])
+        pub.setdefault("hashtags", meta.get("hashtags", []))
+        recut.gravar_json(_arquivo(corte_json), pub)
+    return [plataforma]
 
 
 def _registro_telegram(pub, pasta_contas):
@@ -199,7 +259,9 @@ def enviar(corte_json, plataforma, http=None, esperar=time.sleep, pasta_contas=c
         video = Path(corte_json).with_name(meta["arquivo"])
         texto = texto_final(pub["legenda"], pub["hashtags"])
         if plataforma == "youtube":
-            link = _youtube(http, tok, video, pub["legenda"], texto, etapa)
+            alvo = pub["plataformas"]["youtube"]
+            link = _youtube(http, tok, video, alvo.get("titulo") or pub["legenda"], texto, etapa,
+                            publish_at=alvo.get("publish_at"))
         else:
             link = _instagram(http, tok, contas.ler("instagram", pasta_contas)["user_id"], video, texto, corte_json,
                               pub["plataformas"]["instagram"].get("container"), esperar, etapa)
@@ -214,10 +276,12 @@ def enviar(corte_json, plataforma, http=None, esperar=time.sleep, pasta_contas=c
         return _mudar(corte_json, plataforma, "incerto" if incerto else "erro", erro=msg)
 
 
-def _youtube(http, tok, video, legenda, texto, etapa):
+def _youtube(http, tok, video, legenda, texto, etapa, publish_at=None):
     tamanho = video.stat().st_size
     metadados = {"snippet": {"title": sem_sinais(legenda).strip()[:100], "description": sem_sinais(texto), "categoryId": "22"},
                  "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False}}
+    if publish_at is not None:
+        metadados["status"].update(privacyStatus="private", publishAt=data_publicacao(publish_at))
     status, cab, corpo = http("POST", "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable"
                               "&part=snippet,status", dados=metadados, cabecalhos={
                                   "Authorization": f"Bearer {tok}", "Content-Type": "application/json; charset=UTF-8",
@@ -309,9 +373,16 @@ def _enviar_telegram(corte_json, http, esperar, pasta_contas):
             legenda = meta.get("titulo") or video.stem
             if meta.get("nota") is not None:
                 legenda += f" · nota {meta['nota']:g}"
+            dados = {"chat_id": chat, "caption": legenda, "supports_streaming": "true"}
+            # O Telegram usa as dimensões informadas pelo remetente para montar o player.
+            largura, altura = recut.tamanho_video(video)
+            if largura > 0 and altura > 0:
+                dados.update(width=largura, height=altura)
+            duracao = meta.get("duracao")
+            if isinstance(duracao, (int, float)) and math.isfinite(duracao) and duracao > 0:
+                dados["duration"] = math.ceil(duracao)
             # ponytail: 10 min para subir até 50 MB; aumentar se a conexão for lenta
-            passo("sendVideo", {"chat_id": chat, "caption": legenda, "supports_streaming": "true"},
-                  ("video", video), timeout=600)
+            passo("sendVideo", dados, ("video", video), timeout=600)
         if len(mensagens) < 2:
             texto = "<pre>" + html.escape(texto_final(pub["legenda"], pub["hashtags"]), quote=False) + "</pre>"
             passo("sendMessage", {"chat_id": chat, "text": texto, "parse_mode": "HTML"})

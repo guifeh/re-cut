@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { Clapperboard, Copy, Download, Film, Palette, Radio, Scissors, Sparkles, Square, Trash2, Upload, UserRound, Workflow } from 'lucide-react'
 import { api, jobDoCorte, nomeEntrada, parseHoras, upload, type Corte, type Estrategia, type Job, type Template } from '@/api'
 import { Contas } from '@/contas'
+import { GradeCortes } from '@/cortes'
 import { Esteira } from '@/esteira'
 import { Confirmar, Lixeira, porDias, usePrazoLixeira } from '@/lixeira'
 import { PreviaTemplate, TIPO_MOMENTO, Templates } from '@/templates'
@@ -103,7 +104,7 @@ export default function App() {
             </TabsContent>
 
             <TabsContent value="cortes" className="mt-6">
-              <GradeCortes cortes={cortes} carregando={jobs === null} onAbrir={setAberto} />
+              <GradeCortes cortes={cortes} carregando={jobs === null} onAbrir={setAberto} onMudou={atualizar} />
             </TabsContent>
 
             <TabsContent value="templates" className="mt-6">
@@ -432,26 +433,6 @@ function ListaJobs({ jobs, onAtualizar, onAbrir }: { jobs: Job[] | null; onAtual
           <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 font-mono text-xs">{typeof detalhe?.log === 'string' ? detalhe.log || '(sem saída ainda)' : ''}</pre>
         </DialogContent>
       </Dialog>
-    </div>
-  )
-}
-
-function GradeCortes({ cortes, carregando, onAbrir }: { cortes: Corte[]; carregando: boolean; onAbrir: (c: Corte) => void }) {
-  if (carregando) return <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">{[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} className="aspect-[9/16]" />)}</div>
-  if (!cortes.length)
-    return <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">Os cortes aparecem aqui, ordenados pela nota viral.</p>
-  return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-      {cortes.map((c) => (
-        <button key={c.video_url} onClick={() => onAbrir(c)} className="group flex flex-col gap-2 text-left">
-          <div className="relative overflow-hidden rounded-xl border bg-muted">
-            <img src={c.thumb_url} alt={c.titulo} className="aspect-[9/16] w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" loading="lazy" />
-            <span className={`absolute left-2 top-2 rounded-md px-1.5 py-0.5 text-xs font-bold ${c.nota >= 8 ? 'bg-primary text-primary-foreground' : 'bg-black/70 text-white'}`}>{c.nota.toFixed(1)}</span>
-            <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-[11px] text-white">{tempo(c.duracao)}</span>
-          </div>
-          <span className="line-clamp-2 text-sm font-medium leading-snug">{c.titulo}</span>
-        </button>
-      ))}
     </div>
   )
 }

@@ -28,11 +28,11 @@ A análise usa a **sessão local de um agente CLI já logado** no computador, se
 
 | Agente | Comando usado |
 |---|---|
-| Claude Code | `claude -p --output-format json --json-schema …` |
 | Codex | `codex exec --output-schema … --sandbox read-only` |
+| Claude Code | `claude -p --output-format json --json-schema …` |
 | Gemini CLI | `gemini -p … --output-format json` |
 
-Tenta na ordem acima (ou começa pelo de `RECUT_AGENTE`); se um falhar, tenta o próximo. É preciso ter pelo menos um instalado e logado.
+O Codex é a primeira opção e usa o login local do Codex CLI. Faça login com `codex login` e confira a sessão com `codex login status`. Para priorizar outro agente, defina `RECUT_AGENTE` como `claude` ou `gemini`. Se o agente estiver indisponível ou falhar, o re-cut tenta o próximo.
 
 ## Esteira e publicação
 
@@ -54,6 +54,14 @@ Desenho completo em `docs/superpowers/specs/2026-11-04-esteira-automatica-design
 - Um agente de IA logado: `claude`, `codex login` ou `gemini`
 
 O ffmpeg vem pelo pacote `imageio-ffmpeg` (já com libass e libx264); `RECUT_FFMPEG` aponta para outro, se preferir.
+
+No Windows, para transcrever com uma GPU NVIDIA, instale as bibliotecas CUDA 12 no ambiente virtual do re-cut:
+
+```powershell
+.venv\Scripts\python -m pip install nvidia-cublas-cu12==12.9.2.10 nvidia-cudnn-cu12 nvidia-cuda-runtime-cu12 nvidia-cuda-nvrtc-cu12
+```
+
+O re-cut inclui as pastas dessas DLLs no `PATH` do processo de transcrição.
 
 ## Instalação
 

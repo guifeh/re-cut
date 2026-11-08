@@ -110,6 +110,46 @@ def test_aprovar_dispara_envios_e_tiktok_fica_manual(servidor, monkeypatch):
     assert pub["plataformas"]["youtube"]["estado"] == "ok" and pub["plataformas"]["tiktok"]["estado"] == "manual"
 
 
+def test_grade_envia_so_telegram_sem_aprovacao_anterior(servidor, monkeypatch):
+    contas.salvar("telegram", {"token": "123:TOKEN", "chat_id": 42, "bot": "teste_bot"}, contas.PASTA)
+    chamadas = envio_falso(monkeypatch)
+    status, pub = pedir(servidor, f"/api/jobs/{JID}/cortes/enviar",
+                        {"json": "fonte_corte01.json", "plataforma": "telegram"})
+    assert status == 200
+    esperar_envios()
+    assert chamadas == [("telegram", "enviando")]
+    assert set(pub["plataformas"]) == {"tiktok"}
+
+
+def test_grade_agenda_youtube_e_bloqueia_envio_concorrente(servidor, monkeypatch):
+    contas.salvar("youtube", {"access_token": "TOKEN-TESTE"}, contas.PASTA)
+    liberar = threading.Event()
+    chamadas = envio_falso(monkeypatch, liberar)
+    dados = {"json": "fonte_corte01.json", "plataforma": "youtube", "publish_at": "2999-01-01T10:30:00-03:00"}
+    try:
+        status, pub = pedir(servidor, f"/api/jobs/{JID}/cortes/enviar", dados)
+        assert status == 200
+        assert pub["plataformas"]["youtube"]["publish_at"] == "2999-01-01T13:30:00+00:00"
+        assert pedir(servidor, f"/api/jobs/{JID}/cortes/enviar", dados)[0] == 400
+    finally:
+        liberar.set()
+        esperar_envios()
+    assert chamadas == [("youtube", "enviando")]
+
+
+@pytest.mark.parametrize("extras", [
+    {"publish_at": "2000-01-01T00:00:00Z"}, {"forcar": "true"}, {"plataforma": "instagram"},
+    {"json": "../fora_corte01.json"},
+])
+def test_grade_rejeita_envio_invalido_sem_upload(servidor, monkeypatch, extras):
+    contas.salvar("youtube", {"access_token": "TOKEN-TESTE"}, contas.PASTA)
+    chamadas = envio_falso(monkeypatch)
+    dados = {"json": "fonte_corte01.json", "plataforma": "youtube", **extras}
+    assert pedir(servidor, f"/api/jobs/{JID}/cortes/enviar", dados)[0] == 400
+    assert chamadas == []
+    assert not corte().with_suffix(".publicacao").exists()
+
+
 def test_contas_lista_telegram_sem_token(servidor):
     contas.salvar("telegram", {"token": "123:SEGREDO", "bot": "meu_bot", "pareamento": "k3J9xQ"}, contas.PASTA)
     status, r = pedir(servidor, "/api/contas")

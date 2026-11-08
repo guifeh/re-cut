@@ -103,8 +103,10 @@ def achar_corte(jobs, bot, chat_id, message_id):
             t = json.loads(f.read_text(encoding="utf-8")).get("telegram") or {}
         except (OSError, ValueError):  # apagado ou corrompido no meio da varredura: não trava a escuta
             continue
-        if t.get("bot") == bot and t.get("chat_id") == chat_id and message_id in (t.get("mensagens") or []):
-            return f.with_suffix(".json")
+        for envio in [t, *(t.get("historico") or [])]:
+            if isinstance(envio, dict) and envio.get("bot") == bot and envio.get("chat_id") == chat_id \
+                    and message_id in (envio.get("mensagens") or []):
+                return f.with_suffix(".json")
     return None
 
 

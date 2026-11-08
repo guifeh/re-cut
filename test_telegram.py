@@ -162,6 +162,36 @@ def test_reply_de_outro_bot_nao_salva(tmp_path, pareado):
     assert enviados(http) == ["Responda (arrastar para o lado) à mensagem do corte com o link"]
 
 
+def test_reply_ao_video_anterior_ao_reenvio_salva_link(tmp_path, pareado):
+    corte = novo_corte(tmp_path)
+    arquivo = corte.with_suffix(".publicacao")
+    pub = json.loads(arquivo.read_text(encoding="utf-8"))
+    anterior = dict(pub["telegram"])
+    pub["telegram"].update(mensagens=[20, 21], historico=[anterior])
+    arquivo.write_text(json.dumps(pub), encoding="utf-8")
+    http = Falso(OK)
+
+    telegram.processar(msg("https://www.tiktok.com/@eu/video/1", reply=10), tmp_path / "jobs", http, pareado)
+
+    assert tiktok(corte)["link"] == "https://www.tiktok.com/@eu/video/1"
+    assert enviados(http) == ["✓ link salvo em t"]
+
+
+@pytest.mark.parametrize("bot,chat", [("velho_bot", 7), ("meu_bot", 8)])
+def test_historico_nao_confunde_bot_ou_chat(tmp_path, pareado, bot, chat):
+    corte = novo_corte(tmp_path)
+    arquivo = corte.with_suffix(".publicacao")
+    pub = json.loads(arquivo.read_text(encoding="utf-8"))
+    pub["telegram"].update(mensagens=[20, 21], historico=[{"bot": bot, "chat_id": chat, "mensagens": [10, 11]}])
+    arquivo.write_text(json.dumps(pub), encoding="utf-8")
+    http = Falso(OK)
+
+    telegram.processar(msg("https://www.tiktok.com/@eu/video/1", reply=10), tmp_path / "jobs", http, pareado)
+
+    assert tiktok(corte)["link"] is None
+    assert enviados(http) == [telegram.PEDE_REPLY]
+
+
 def test_link_sem_reply_pede_reply(tmp_path, pareado):
     novo_corte(tmp_path)
     http = Falso(OK)

@@ -1,9 +1,10 @@
 import json
+import datetime as dt
 
 import pytest
 
 import contas
-from publicar import aprovar, colar_link, enviar, ler_publicacao, tentar_de_novo, texto_final
+from publicar import aprovar, colar_link, data_publicacao, enviar, ler_publicacao, preparar_envio, tentar_de_novo, texto_final
 
 TOKEN = "TOKEN-SECRETO"
 
@@ -62,6 +63,95 @@ def test_aprovar_duas_vezes_nao_duplica(corte):
 
 def test_ler_sem_arquivo_e_vazio(corte):
     assert ler_publicacao(corte, set()) == {}
+
+
+def test_enviar_destino_individual_preserva_telegram(corte, pasta):
+    contas.salvar("telegram", {"token": "123:ABC", "chat_id": 42, "bot": "teste_bot"}, pasta)
+    preparar_envio(corte, "telegram", pasta_contas=pasta)
+    pub = json.loads(corte.with_suffix(".publicacao").read_text())
+    assert set(pub["plataformas"]) == {"tiktok"}
+    assert pub["plataformas"]["tiktok"]["estado"] == "manual"
+    telegram_original = pub["telegram"]
+    preparar_envio(corte, "youtube", pasta_contas=pasta)
+    pub = json.loads(corte.with_suffix(".publicacao").read_text())
+    assert pub["telegram"] == telegram_original
+    assert set(pub["plataformas"]) == {"youtube", "tiktok"}
+    colar_link(corte, "tiktok", "https://www.tiktok.com/@teste/video/123")
+
+
+def test_agendar_youtube_usa_privado_com_data(corte, pasta):
+    data = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)).isoformat()
+    preparar_envio(corte, "youtube", publish_at=data, pasta_contas=pasta)
+    http = Falso(*youtube_ok())
+    assert enviar(corte, "youtube", http, pasta_contas=pasta)["estado"] == "ok"
+    dados = http.chamadas[0]["dados"]
+    assert dados["status"] == {"privacyStatus": "private", "publishAt": data, "selfDeclaredMadeForKids": False}
+    assert dados["snippet"]["title"] == "t"
+    assert ler_publicacao(corte, set())["plataformas"]["youtube"]["publish_at"] == data
+
+
+@pytest.mark.parametrize("data", ["2000-01-01T12:00:00Z", "2999-01-01T12:00:00", "invalida", "", 123])
+def test_agendamento_invalido_nao_altera_estado(corte, pasta, data):
+    with pytest.raises(ValueError, match="data futura"):
+        preparar_envio(corte, "youtube", publish_at=data, pasta_contas=pasta)
+    assert not corte.with_suffix(".publicacao").exists()
+
+
+def test_data_publicacao_converte_fuso():
+    assert data_publicacao("2999-01-01T10:30:00-03:00") == "2999-01-01T13:30:00+00:00"
+
+
+def test_agendamento_vencido_antes_do_upload_nao_publica(corte, pasta):
+    preparar_envio(corte, "youtube", publish_at="2999-01-01T10:30:00Z", pasta_contas=pasta)
+    pub = json.loads(corte.with_suffix(".publicacao").read_text())
+    pub["plataformas"]["youtube"]["publish_at"] = "2000-01-01T10:30:00Z"
+    corte.with_suffix(".publicacao").write_text(json.dumps(pub))
+    http = Falso()
+    resultado = enviar(corte, "youtube", http, pasta_contas=pasta)
+    assert resultado["estado"] == "erro"
+    assert http.chamadas == []
+
+
+def test_reenvio_exige_confirmacao_e_guarda_link(corte, pasta):
+    preparar_envio(corte, "youtube", pasta_contas=pasta)
+    with pytest.raises(ValueError, match="já está sendo enviado"):
+        preparar_envio(corte, "youtube", forcar=True, pasta_contas=pasta)
+    enviar(corte, "youtube", Falso(*youtube_ok("original")), pasta_contas=pasta)
+    with pytest.raises(ValueError, match="confirme"):
+        preparar_envio(corte, "youtube", pasta_contas=pasta)
+    preparar_envio(corte, "youtube", forcar=True, pasta_contas=pasta)
+    pub = json.loads(corte.with_suffix(".publicacao").read_text())
+    assert pub["plataformas"]["youtube"]["historico"][0]["link"].endswith("/original")
+    assert pub["plataformas"]["youtube"]["link"] is None
+
+
+def test_reenvio_telegram_erro_parcial_preserva_video(corte, pasta):
+    contas.salvar("telegram", {"token": "123:ABC", "chat_id": 42, "bot": "teste_bot"}, pasta)
+    preparar_envio(corte, "telegram", pasta_contas=pasta)
+    pub = json.loads(corte.with_suffix(".publicacao").read_text())
+    pub["telegram"].update(estado="erro", mensagens=[123])
+    corte.with_suffix(".publicacao").write_text(json.dumps(pub))
+    preparar_envio(corte, "telegram", pasta_contas=pasta)
+    assert json.loads(corte.with_suffix(".publicacao").read_text())["telegram"]["mensagens"] == [123]
+
+
+def test_destino_desconectado_nao_grava_envio(corte):
+    with pytest.raises(ValueError, match="conecte o Telegram"):
+        preparar_envio(corte, "telegram", pasta_contas=sem_contas(corte))
+    assert not corte.with_suffix(".publicacao").exists()
+
+
+def test_aprovacao_depois_de_envio_individual_preserva_destinos(corte, pasta):
+    contas.salvar("telegram", {"token": "123:ABC", "chat_id": 42, "bot": "teste_bot"}, pasta)
+    preparar_envio(corte, "telegram", pasta_contas=pasta)
+    preparar_envio(corte, "youtube", publish_at="2999-01-01T10:30:00Z", pasta_contas=pasta)
+    antes = json.loads(corte.with_suffix(".publicacao").read_text())
+    assert not antes.get("aprovado_em")
+    assert aprovar(corte, "nova legenda", ["nova"], pasta_contas=pasta) == ["instagram"]
+    depois = json.loads(corte.with_suffix(".publicacao").read_text())
+    assert depois["telegram"] == antes["telegram"]
+    assert depois["plataformas"]["youtube"] == antes["plataformas"]["youtube"]
+    assert depois["aprovado_em"]
 
 
 def test_enviando_sem_thread_vira_incerto(corte):

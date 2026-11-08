@@ -127,8 +127,8 @@ def test_slug():
 
 def test_agentes_disponiveis():
     instalados = {"claude": "/bin/claude", "codex": "/bin/codex"}
-    assert agentes_disponiveis(which=instalados.get) == [("claude", "/bin/claude"), ("codex", "/bin/codex")]
-    assert agentes_disponiveis("codex", instalados.get)[0] == ("codex", "/bin/codex")
+    assert agentes_disponiveis(which=instalados.get) == [("codex", "/bin/codex"), ("claude", "/bin/claude")]
+    assert agentes_disponiveis("claude", instalados.get)[0] == ("claude", "/bin/claude")
     assert agentes_disponiveis("xyz", {"codex": "/bin/codex"}.get) == [("codex", "/bin/codex")]
 
 
@@ -305,6 +305,29 @@ def test_erro_fecha_o_item_aberto(capsys):
     marcar_erro(RuntimeError("falhou"))
     ev = _eventos(capsys.readouterr().out)[-1]
     assert (ev["etapa"], ev["estado"], ev["item"], ev["msg"]) == ("transcrever", "erro", "x", "falhou")
+
+
+def test_comando_gravacao_live_separa_video_e_audio(tmp_path):
+    import recut
+    info = {"requested_formats": [
+        {"url": "https://video.test/live.m3u8", "http_headers": {"User-Agent": "teste"}},
+        {"url": "https://audio.test/live.m3u8"},
+    ]}
+    cmd = recut.comando_gravacao_live(info, tmp_path, 3)
+    assert [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-i"] == [
+        "https://video.test/live.m3u8", "https://audio.test/live.m3u8"]
+    assert [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-map"] == [
+        "0:v:0?", "0:a:0?", "1:v:0?", "1:a:0?"]
+    assert "User-Agent: teste\r\n" in cmd
+    assert cmd[cmd.index("-segment_start_number") + 1] == "3"
+
+
+def test_comando_gravacao_live_url_unica(tmp_path):
+    import recut
+    cmd = recut.comando_gravacao_live({"url": "https://stream.test/live.m3u8"}, tmp_path, 0)
+    assert cmd.count("-i") == 1
+    assert cmd[cmd.index("-i") + 1] == "https://stream.test/live.m3u8"
+    assert cmd[-1] == str(tmp_path / "lote_%04d.ts")
 
 
 def test_baixar_usa_o_mesmo_item(monkeypatch, tmp_path, capsys):

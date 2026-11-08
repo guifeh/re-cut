@@ -26,6 +26,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import time
 import urllib.request
@@ -43,7 +44,7 @@ FIM_DE_VEZ_SEG = 300  # "termina de vez, alguns minutos depois de sair do ar"
 AUDIO_HZ = 4000  # só para medir energia
 PASSO_ROSTO = 0.5  # segundos entre amostras do tracking de rosto
 ESTRATEGIAS = Path(__file__).with_name("estrategias")
-AGENTES = ("claude", "codex", "gemini")  # CLIs com sessão local; RECUT_AGENTE escolhe o preferido
+AGENTES = ("codex", "claude", "gemini")  # CLIs com sessão local; RECUT_AGENTE escolhe o preferido
 
 SISTEMA = """Você é editor de cortes para TikTok, Reels e Shorts.
 Recebe a transcrição de um vídeo ou de um lote de live com marcação de tempo; cada linha traz a energia
@@ -598,6 +599,12 @@ def ao_vivo(canal):
 
 @functools.cache
 def whisper():
+    if sys.platform == "win32":
+        # O CTranslate2 carrega as DLLs NVIDIA pelo PATH durante a transcrição.
+        nvidia = Path(sysconfig.get_path("purelib")) / "nvidia"
+        bibliotecas = [str(pasta) for pasta in sorted(nvidia.glob("*/bin")) if pasta.is_dir()]
+        if bibliotecas:
+            os.environ["PATH"] = os.pathsep.join([*bibliotecas, os.environ.get("PATH", "")])
     from faster_whisper import WhisperModel
     return WhisperModel(os.getenv("RECUT_WHISPER", "small"), compute_type="int8")
 
@@ -913,6 +920,22 @@ def processar(video, saida, prefixo, cfg):
     return feitos
 
 
+def comando_gravacao_live(info, pasta, inicio):
+    # O YouTube pode entregar vídeo e áudio em URLs separadas, sem info["url"].
+    formatos = info.get("requested_formats") or [info]
+    comando = [FFMPEG, "-nostdin", "-v", "error"]
+    for formato in formatos:
+        headers = formato.get("http_headers") or info.get("http_headers") or {}
+        if headers:
+            comando += ["-headers", "".join(f"{k}: {v}\r\n" for k, v in headers.items())]
+        comando += ["-i", formato["url"]]
+    for indice in range(len(formatos)):
+        comando += ["-map", f"{indice}:v:0?", "-map", f"{indice}:a:0?"]
+    return comando + ["-c", "copy", "-f", "segment", "-segment_time", str(LOTE_SEG),
+                      "-reset_timestamps", "1", "-segment_start_number", str(inicio),
+                      str(pasta / "lote_%04d.ts")]
+
+
 def clipar_live(canal, info, saida, cfg):
     """Uma transmissão: grava em lotes de 10 min e corta cada lote assim que ele fecha."""
     pasta = saida / slug(info.get("uploader_id") or info.get("uploader") or canal) / time.strftime("%Y%m%d-%H%M%S")
@@ -924,9 +947,7 @@ def clipar_live(canal, info, saida, cfg):
     todos, feitos = [], 0
     while info:
         # segment_start_number: se a live cair e voltar, os lotes continuam numerados na mesma pasta
-        gravador = subprocess.Popen([FFMPEG, "-v", "error", "-i", info["url"], "-c", "copy", "-f", "segment",
-                                     "-segment_time", str(LOTE_SEG), "-reset_timestamps", "1",
-                                     "-segment_start_number", str(feitos), str(pasta / "lote_%04d.ts")])
+        gravador = subprocess.Popen(comando_gravacao_live(info, pasta, feitos))
         # ponytail: momentos que cruzam a borda de dois lotes se perdem; sobrepor lotes se isso incomodar
         while True:
             caiu = gravador.poll() is not None
