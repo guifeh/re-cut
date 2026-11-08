@@ -226,6 +226,8 @@ Opcional. O bot manda o vídeo e o texto de cada corte aprovado para o seu Teleg
 Vídeos acima de 50 MB não passam pelo bot: use o **Baixar** do painel. Só os cortes aprovados depois de conectar
 chegam ao Telegram.
 
+Com o servidor do re-cut rodando, o bot também envia um lembrete se houver cortes aguardando aprovação há dez minutos. O worker confere os pendentes a cada 30 segundos e agrupa os títulos por job. Cada corte recebe um único aviso no chat conectado, inclusive após reiniciar o servidor. Aprove pela Esteira ou recuse movendo o corte para a Lixeira. Se um envio tiver resultado de rede incerto, o lembrete fica registrado para evitar uma mensagem duplicada.
+
 ---
 
 ## Conferência final

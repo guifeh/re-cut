@@ -26,6 +26,7 @@ import publicar
 import recut
 import telegram
 import lixeira as lixeira_mod
+import lembretes
 from lixeira import Lixeira
 
 RAIZ = Path(__file__).parent
@@ -581,6 +582,7 @@ if __name__ == "__main__":
     JOBS.mkdir(exist_ok=True)
     threading.Thread(target=expirar_periodicamente, daemon=True).start()
     threading.Thread(target=telegram.ouvir, args=(JOBS,), kwargs={"pasta": contas.PASTA}, daemon=True).start()
+    threading.Thread(target=lembretes.ouvir, args=(JOBS,), kwargs={"pasta": contas.PASTA}, daemon=True).start()
     print(f"re-cut em http://localhost:{PORTA}")
     if REDE:
         try:  # UDP sem enviar nada: o SO escolhe a placa da rota padrão (gethostname pega VPN/Hyper-V no Windows)
