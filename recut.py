@@ -42,6 +42,7 @@ LOTE_SEG = 600  # "lotes de 10 minutos"
 FIM_DE_VEZ_SEG = 300  # "termina de vez, alguns minutos depois de sair do ar"
 AUDIO_HZ = 4000  # só para medir energia
 PASSO_ROSTO = 0.5  # segundos entre amostras do tracking de rosto
+FACECAM_FRACAO = 0.35  # layout de jogo: altura do painel da facecam (o resto é gameplay)
 ESTRATEGIAS = Path(__file__).with_name("estrategias")
 AGENTES = ("claude", "codex", "gemini")  # CLIs com sessão local; RECUT_AGENTE escolhe o preferido
 
@@ -416,14 +417,115 @@ def expr_zoom(tempos, fator):
     return f"1+{fator - 1:.3f}*min(1\\,{termos})"
 
 
-def filtro_video(tpl, iw, ih, nome, x=None, seguir=False, com_logo=False, zooms=(), flashes=(), com_emoji=False):
+def achar_facecam(amostras, iw, ih, minimo=0.15):
+    """Rosto do streamer na gravação de um jogo: o grupo de detecções que fica parado no mesmo lugar.
+    amostras: por amostra, a lista de rostos (x, y, w, h) em pixels da fonte. Os personagens do jogo também
+    viram "rosto" às vezes, mas andam pela tela; a facecam fica no canto. Devolve {cx, cy, h, amostras}
+    (mediana do grupo e os índices onde ele apareceu) ou None se nada ficou parado em `minimo` das amostras."""
+    raio, grupos = 0.08 * iw, []
+    for i, rostos in enumerate(amostras):
+        for x, y, w, h in rostos:
+            if h > 0.3 * ih:  # câmera em tela cheia: o recorte central já mostra o streamer
+                continue
+            cx, cy = x + w / 2, y + h / 2
+            g = next((g for g in grupos if abs(g["cx"] - cx) < raio and abs(g["cy"] - cy) < raio), None)
+            if g is None:
+                grupos.append(g := {"cx": cx, "cy": cy, "m": []})
+            g["m"].append((i, cx, cy, h))
+
+    def pontos(g):  # amostras distintas; no meio da tela é mais provável ser personagem do que câmera
+        n = len({i for i, *_ in g["m"]})
+        return n * (0.3 if abs(statistics.median(c[1] for c in g["m"]) / iw - 0.5) < 0.18 else 1)
+
+    validos = [g for g in grupos if len({i for i, *_ in g["m"]}) >= max(4, minimo * len(amostras))]
+    if not validos:
+        return None
+    g = max(validos, key=pontos)
+    return {"cx": statistics.median(c[1] for c in g["m"]), "cy": statistics.median(c[2] for c in g["m"]),
+            "h": statistics.median(c[3] for c in g["m"]), "amostras": sorted({i for i, *_ in g["m"]})}
+
+
+def trechos_facecam(indices, n, passo, lacuna=3.0, minimo=1.5):
+    """Amostras em que a facecam foi vista -> trechos (início, fim) em segundos relativos ao corte.
+    O detector falha quando a pessoa vira o rosto, então buracos de até `lacuna` segundos são preenchidos;
+    trechos menores que `minimo` são descartados (piscar de layout atrapalha mais do que ajuda)."""
+    dur, trechos = n * passo, []
+    for i in sorted(indices):
+        a, b = max(0.0, i * passo - passo / 2), min(dur, i * passo + passo / 2)
+        if trechos and a - trechos[-1][1] <= lacuna:
+            trechos[-1][1] = b
+        else:
+            trechos.append([a, b])
+    if trechos and trechos[0][0] <= lacuna:
+        trechos[0][0] = 0.0
+    if trechos and dur - trechos[-1][1] <= lacuna:
+        trechos[-1][1] = dur
+    return [(round(a, 2), round(b, 2)) for a, b in trechos if b - a >= minimo]
+
+
+def caixa_facecam(cx, cy, h, iw, ih, aspecto, folga=1.8):
+    """(x, y, w, h) do recorte da facecam na proporção do painel (largura/altura), centrado no rosto."""
+    ch = min(ih, h * folga)
+    cw = ch * aspecto
+    if cw > iw:
+        cw, ch = iw, iw / aspecto
+    cw, ch = int(cw) // 2 * 2, int(ch) // 2 * 2
+    x = int(min(max(cx - cw / 2, 0), iw - cw))
+    y = int(min(max(cy - ch * 0.45, 0), ih - ch))
+    return x, y, cw, ch
+
+
+def paineis_gameplay(H):
+    """Alturas (facecam, gameplay) do layout dividido."""
+    hf = int(H * FACECAM_FRACAO) // 2 * 2
+    return hf, H - hf
+
+
+def filtro_gameplay(iw, ih, W, H, cam=None, trechos=(), dur=0.0):
+    """Início do grafo para gravações de jogo: [0:v] -> quadro W x H. Nos trechos com facecam, a câmera do
+    streamer em cima e o meio da tela (onde fica o personagem em terceira pessoa) embaixo; fora deles, o meio
+    da tela ocupando tudo. cam: (x, y, w, h) da facecam na fonte. None se a fonte não é mais larga que o destino."""
+    cheio = recorte_vertical(iw / 2, iw, ih, W / H)
+    if cheio is None:
+        return None
+    tela_cheia = f"crop={cheio[1]}:{ih}:{cheio[0]}:0,scale={W}:{H},setsar=1"
+    if not cam or not trechos:
+        return f"[0:v]{tela_cheia}"
+    hf, hg = paineis_gameplay(H)
+    gw = min(iw, int(ih * W / hg) // 2 * 2)
+    fx, fy, fw, fh = cam
+    dividido = (f"[g]crop={gw}:{ih}:{(iw - gw) // 2}:0,scale={W}:{hg},setsar=1[gp];"
+                f"[c]crop={fw}:{fh}:{fx}:{fy},scale={W}:{hf},setsar=1[cam];[cam][gp]vstack")
+    if trechos[0][0] <= 0 and trechos[-1][1] >= dur and len(trechos) == 1:
+        return f"[0:v]split[g][c];{dividido}"
+    quando = "+".join(f"between(t\\,{a:.2f}\\,{b:.2f})" for a, b in trechos)
+    return (f"[0:v]split=3[g][c][f];[f]{tela_cheia}[cheio];{dividido}[div];"
+            f"[cheio][div]overlay=0:0:enable='{quando}'")
+
+
+def ancora_gameplay(t, tipo, trechos, H):
+    """Para onde o zoom mira no layout de jogo: risada e reação vão na cara do streamer (se a facecam está
+    na tela), o resto no personagem, no meio do painel de baixo (ou da tela, sem facecam)."""
+    if not any(a <= t <= b for a, b in trechos):
+        return 0.5, 0.5
+    hf, hg = paineis_gameplay(H)
+    if tipo in ("risada", "reacao"):
+        return 0.5, round(hf / 2 / H, 3)
+    return 0.5, round((hf + hg / 2) / H, 3)
+
+
+def filtro_video(tpl, iw, ih, nome, x=None, seguir=False, com_logo=False, zooms=(), flashes=(), com_emoji=False,
+                 base=None):
     """filter_complex do ffmpeg para o template. x: posição do recorte (None = centro); com seguir=True
     ele é só o primeiro quadro e o resto vem do arquivo <nome>.cmd via sendcmd. zooms: (t, ax, ay) com t em
-    segundos relativos ao corte e (ax, ay) o rosto no quadro final (ancora_zoom); flashes: segundos."""
+    segundos relativos ao corte e (ax, ay) o rosto no quadro final (ancora_zoom); flashes: segundos.
+    base: início do grafo já pronto (layout de jogo), no lugar do enquadramento do template."""
     W, H = PROPORCOES[tpl["proporcao"]]
     modo = tpl["enquadramento"]
     rec = recorte_vertical(iw / 2, iw, ih, W / H)
-    if modo == "ajustar":  # fit-slot: vídeo inteiro sobre o próprio vídeo desfocado
+    if base:
+        v = base
+    elif modo == "ajustar":  # fit-slot: vídeo inteiro sobre o próprio vídeo desfocado
         v = (f"[0:v]split[a][b];[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=20:2[bg];"
              f"[b]scale={W}:{H}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2")
     elif rec is None:  # fonte mais estreita que o destino: corta a altura, centralizado
@@ -703,6 +805,30 @@ def trajetoria_do_rosto(video, inicio, fim, passo=PASSO_ROSTO):
     return xs, ys, iw, ih
 
 
+def rostos_por_amostra(video, inicio, fim, passo=PASSO_ROSTO):
+    """Todos os rostos (x, y, w, h em pixels da fonte) a cada `passo` segundos. Para achar a facecam, que
+    costuma ser pequena no canto, detecta em 960px e aceita rosto menor que o tracking normal."""
+    import cv2
+    cap = cv2.VideoCapture(str(video))
+    iw, ih = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    pular = max(1, round((cap.get(cv2.CAP_PROP_FPS) or 30) * passo))
+    escala = min(1.0, 960 / iw)
+    det = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    cap.set(cv2.CAP_PROP_POS_MSEC, inicio * 1000)
+    amostras = []
+    for _ in range(int((fim - inicio) / passo) + 1):
+        ok, frame = cap.read()
+        for _ in range(pular - 1):
+            cap.grab()
+        if not ok:
+            break
+        cinza = cv2.cvtColor(cv2.resize(frame, None, fx=escala, fy=escala), cv2.COLOR_BGR2GRAY)
+        rostos = det.detectMultiScale(cinza, 1.15, 6, minSize=(32, 32))
+        amostras.append([tuple(float(v) / escala for v in r) for r in rostos])
+    cap.release()
+    return amostras, iw, ih
+
+
 def garantir_sons():
     """Cria efeitos/<categoria>/ com os sons padrão (gerados pelo ffmpeg) na primeira vez."""
     for som_id, fonte in SONS_PADRAO.items():
@@ -751,7 +877,27 @@ def tamanho_video(video):
     return iw, ih
 
 
-def renderizar(video, c, palavras, saida, nome, tpl=None):
+def layout_gameplay(video, c, W, H):
+    """Detecta a facecam no corte e monta o início do grafo do layout de jogo. (base, trechos, iw, ih);
+    base None quando a fonte não é mais larga que o destino (aí segue o enquadramento do template)."""
+    amostras, iw, ih = rostos_por_amostra(video, c["inicio"], c["fim"])
+    fc = achar_facecam(amostras, iw, ih)
+    trechos = trechos_facecam(fc["amostras"], len(amostras), PASSO_ROSTO) if fc else []
+    cam = caixa_facecam(fc["cx"], fc["cy"], fc["h"], iw, ih, W / paineis_gameplay(H)[0]) if trechos else None
+    base = filtro_gameplay(iw, ih, W, H, cam, trechos, c["fim"] - c["inicio"])
+    if base is None:
+        print("  layout de jogo: a fonte não é mais larga que o corte; usando o enquadramento do template",
+              file=sys.stderr)
+    elif trechos:
+        print(f"  layout de jogo: facecam em {len(trechos)} trecho(s), "
+              f"{sum(b - a for a, b in trechos):.0f}s de {c['fim'] - c['inicio']:.0f}s")
+    else:
+        print("  layout de jogo: facecam não encontrada; gameplay em tela cheia")
+    return base, trechos, iw, ih
+
+
+def renderizar(video, c, palavras, saida, nome, tpl=None, layout=""):
+    """layout="gameplay": facecam em cima e personagem embaixo (gravações de jogo), no lugar do enquadramento."""
     tpl = tpl or normalizar_template({})
     W, H = PROPORCOES[tpl["proporcao"]]
     dur, vel = c["fim"] - c["inicio"], tpl["velocidade"]
@@ -760,27 +906,33 @@ def renderizar(video, c, palavras, saida, nome, tpl=None):
     plano = plano_efeitos(c.get("momentos", []), tpl, c["inicio"])
     por_efeito = {e: [(rel, m) for rel, efeito, m in plano if efeito == e] for e in EFEITOS}
     tempos_zoom = [rel for rel, _ in por_efeito["zoom"]]
-    if modo in ("rosto", "rosto_fixo") or tempos_zoom:  # o zoom mira o rosto em qualquer enquadramento
-        xs, ys, iw, ih = trajetoria_do_rosto(video, c["inicio"], c["fim"])
+    base = None
+    if layout == "gameplay":
+        base, trechos, iw, ih = layout_gameplay(video, c, W, H)
+    if base:
+        zooms = [(rel, *ancora_gameplay(rel, m["tipo"], trechos, H)) for rel, m in por_efeito["zoom"]]
     else:
-        (iw, ih), xs, ys = tamanho_video(video), [], []
-    rec = recorte_vertical(iw / 2, iw, ih, W / H)
-    trajetoria = suavizar_trajetoria(xs, iw / 2, zona_morta=0.06 * rec[1]) if rec and xs else []
-    if modo in ("rosto", "rosto_fixo") and rec:
-        seguir = modo == "rosto"
-        if seguir:
-            (saida / f"{nome}.cmd").write_text(comandos_crop(trajetoria, PASSO_ROSTO, iw, rec[1]), encoding="utf-8")
-        # rosto: x do primeiro quadro; rosto_fixo (DisableCameraMotion): onde o rosto mais ficou
-        x = recorte_vertical(trajetoria[0] if seguir else statistics.median(trajetoria), iw, ih, W / H)[0]
+        if modo in ("rosto", "rosto_fixo") or tempos_zoom:  # o zoom mira o rosto em qualquer enquadramento
+            xs, ys, iw, ih = trajetoria_do_rosto(video, c["inicio"], c["fim"])
+        else:
+            (iw, ih), xs, ys = tamanho_video(video), [], []
+        rec = recorte_vertical(iw / 2, iw, ih, W / H)
+        trajetoria = suavizar_trajetoria(xs, iw / 2, zona_morta=0.06 * rec[1]) if rec and xs else []
+        if modo in ("rosto", "rosto_fixo") and rec:
+            seguir = modo == "rosto"
+            if seguir:
+                (saida / f"{nome}.cmd").write_text(comandos_crop(trajetoria, PASSO_ROSTO, iw, rec[1]), encoding="utf-8")
+            # rosto: x do primeiro quadro; rosto_fixo (DisableCameraMotion): onde o rosto mais ficou
+            x = recorte_vertical(trajetoria[0] if seguir else statistics.median(trajetoria), iw, ih, W / H)[0]
 
-    def crop_x_em(t):  # x do recorte no instante t, do jeito que o filtro vai cortar
-        if modo == "ajustar" or not rec:
-            return None
-        if seguir:
-            return recorte_vertical(trajetoria[min(round(t / PASSO_ROSTO), len(trajetoria) - 1)], iw, ih, W / H)[0]
-        return rec[0] if x is None else x
+        def crop_x_em(t):  # x do recorte no instante t, do jeito que o filtro vai cortar
+            if modo == "ajustar" or not rec:
+                return None
+            if seguir:
+                return recorte_vertical(trajetoria[min(round(t / PASSO_ROSTO), len(trajetoria) - 1)], iw, ih, W / H)[0]
+            return rec[0] if x is None else x
 
-    zooms = [(t, *ancora_zoom(t, xs, ys, PASSO_ROSTO, iw, ih, W, H, modo, crop_x_em(t))) for t in tempos_zoom]
+        zooms = [(t, *ancora_zoom(t, xs, ys, PASSO_ROSTO, iw, ih, W, H, modo, crop_x_em(t))) for t in tempos_zoom]
     logo = tpl["logo"]["arquivo"]
     com_logo = bool(logo) and Path(logo).is_file()
     if logo and not com_logo:
@@ -805,7 +957,8 @@ def renderizar(video, c, palavras, saida, nome, tpl=None):
     for _, arq in sons:
         args += ["-i", str(arq.resolve())]
     grafo = filtro_video(tpl, iw, ih, nome, x, seguir, com_logo,
-                         zooms=zooms, flashes=[rel for rel, _ in por_efeito["flash"]], com_emoji=bool(por_efeito["emoji"]))
+                         zooms=zooms, flashes=[rel for rel, _ in por_efeito["flash"]], com_emoji=bool(por_efeito["emoji"]),
+                         base=base)
     audio = filtro_audio([rel for rel, _ in sons], 2 if com_logo else 1, vel)
     if audio:
         args += ["-filter_complex", f"{grafo};{audio}", "-map", "[out]", "-map", "[aout]"]
@@ -828,7 +981,7 @@ def reaplicar(arquivos, tpl):
             print(f"[{arq.stem}] sem palavras ou vídeo de origem salvos; gere o corte de novo", file=sys.stderr)
             continue
         print(f"[{arq.stem}] aplicando template {tpl['nome']}")
-        renderizar(Path(c["fonte"]), c, [tuple(w) for w in c["palavras"]], arq.parent, arq.stem, tpl)
+        renderizar(Path(c["fonte"]), c, [tuple(w) for w in c["palavras"]], arq.parent, arq.stem, tpl, c.get("layout", ""))
         c["template"] = tpl["nome"]
         c["duracao"] = round((c["fim"] - c["inicio"]) / tpl["velocidade"], 1)
         gravar_json(arq, c)
@@ -896,8 +1049,10 @@ def processar(video, saida, prefixo, cfg):
         nome = f"{prefixo}_corte{i:02d}"
         c["momentos"] = limpar_momentos(c.get("momentos"), c["inicio"], c["fim"])
         print(f"[{prefixo}] {nome} nota {c['nota']:.1f}: {c['titulo']}")
-        renderizar(video, c, palavras, saida, nome, cfg["template"])
+        renderizar(video, c, palavras, saida, nome, cfg["template"], cfg.get("layout", ""))
         marcar("renderizar", "progresso", prefixo, corte=nome, progresso=round(i / len(cortes), 2), msg=f"{nome} pronto")
+        if cfg.get("layout"):  # a reaplicação de template mantém o layout de jogo
+            c["layout"] = cfg["layout"]
         c = {**c, "legendas": limpar_legendas(c), "arquivo": f"{nome}.mp4", "thumbnail": f"{nome}.jpg", "lote": prefixo, "template": cfg["template"]["nome"],
              "duracao": round((c["fim"] - c["inicio"]) / cfg["template"]["velocidade"], 1),
              "criado_em": dt.datetime.now().isoformat(timespec="seconds"),
@@ -977,6 +1132,8 @@ def main():
     p.add_argument("--horas", type=lista_int, default=set(), help="horas para monitorar, 0-23 (ex.: 18,19,20)")
     p.add_argument("--webhook", default="", help="URL que recebe POST nos eventos live_started/live_clips/live_ended")
     p.add_argument("--template", default="", help="nome de templates/<nome>.json (padrão: legenda clássica)")
+    p.add_argument("--gameplay", action="store_true",
+                   help="gravação de jogo (ex.: GTA): facecam em cima e o personagem no meio da tela embaixo")
     p.add_argument("--reaplicar", action="store_true",
                    help="entrada = um ou mais .json de cortes prontos; renderiza de novo com --template")
     p.add_argument("--saida", type=Path, default=Path("cortes"))
@@ -996,7 +1153,7 @@ def main():
     a.saida.mkdir(parents=True, exist_ok=True)
     cfg = {"estrategia": carregar_estrategia(a.estrategia), "nota_min": a.nota_min, "limite": a.limite_por_lote,
            "dur_min": a.dur_min, "dur_max": a.dur_max, "dias": a.dias, "horas": a.horas, "webhook": a.webhook,
-           "template": tpl}
+           "template": tpl, "layout": "gameplay" if a.gameplay else ""}
     marcar("entrada", "fim", msg=f"Entrada: {a.entrada}")
     try:
         if a.monitorar:

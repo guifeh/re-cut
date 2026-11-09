@@ -127,6 +127,8 @@ def criar_job(dados):
     args = [sys.executable, "-u", str(RAIZ / "recut.py"), entrada, "--saida", str(job_dir)]
     if dados.get("monitorar"):
         args.append("--monitorar")
+    if dados.get("gameplay"):
+        args.append("--gameplay")
     for chave, flag in [("estrategia", "--estrategia"), ("nota_min", "--nota-min"), ("limite", "--limite-por-lote"),
                         ("dur_min", "--dur-min"), ("dur_max", "--dur-max"), ("webhook", "--webhook"),
                         ("template", "--template")]:
@@ -346,18 +348,27 @@ def expirar_periodicamente():
         time.sleep(3600)
 
 
+def encerrar(p):
+    """Encerra o processo com os filhos: no Windows, terminate() mata só o recut.py e o ffmpeg que grava
+    a live continuaria gravando sozinho."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
+    else:
+        p.terminate()
+
+
 def parar_job(jid):
     with lock:
         p = processos.get(jid)
         reaplicacao = processos.get(jid + REAPLICANDO)
     if reaplicacao:
-        reaplicacao.terminate()
+        encerrar(reaplicacao)
     job_dir = JOBS / jid
     m = meta(job_dir)
     m["status"] = "parado"
     salvar_meta(job_dir, m)
     if p:
-        p.terminate()
+        encerrar(p)
     return m
 
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Clapperboard, Copy, Download, Film, Palette, Radio, Scissors, Sparkles, Square, Trash2, Upload, UserRound, Workflow } from 'lucide-react'
+import { Clapperboard, Copy, Download, Film, Gamepad2, Palette, Radio, Scissors, Sparkles, Square, Trash2, Upload, UserRound, Workflow } from 'lucide-react'
 import { api, jobDoCorte, nomeEntrada, parseHoras, upload, type Corte, type Estrategia, type Job, type Template } from '@/api'
 import { Contas } from '@/contas'
 import { Esteira } from '@/esteira'
@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton'
 import { Toaster } from '@/components/ui/sonner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
 const ABAS = ['esteira', 'cortar', 'cortes', 'templates', 'estrategias', 'contas', 'lixeira']
@@ -131,6 +132,20 @@ export default function App() {
   )
 }
 
+function ChaveGameplay({ titulo, ativo, set }: { titulo: string; ativo: boolean; set: (v: boolean) => void }) {
+  return (
+    <label className="flex items-start justify-between gap-4">
+      <span className="flex flex-col gap-1">
+        <span className="flex items-center gap-2 text-sm font-medium"><Gamepad2 className="size-4" /> {titulo}</span>
+        <span className="text-xs text-muted-foreground">
+          Facecam em cima e o personagem, no meio da tela, embaixo. Sem facecam, o gameplay ocupa a tela toda.
+        </span>
+      </span>
+      <Switch checked={ativo} onCheckedChange={set} />
+    </label>
+  )
+}
+
 function NovoCorte({ estrategias, templates, onCriado }: { estrategias: Estrategia[]; templates: Template[]; onCriado: () => void }) {
   const [modo, setModo] = useState<'video' | 'live'>('video')
   const [url, setUrl] = useState('')
@@ -145,6 +160,8 @@ function NovoCorte({ estrategias, templates, onCriado }: { estrategias: Estrateg
   const [dias, setDias] = useState<number[]>([])
   const [horas, setHoras] = useState('')
   const [webhook, setWebhook] = useState('')
+  // gravação de jogo (ex.: GTA), em vídeo ou live: facecam em cima e o personagem embaixo
+  const [gameplay, setGameplay] = useState(false)
   const [enviando, setEnviando] = useState<number | null>(null)
 
   const itensEstrategia = [
@@ -157,7 +174,7 @@ function NovoCorte({ estrategias, templates, onCriado }: { estrategias: Estrateg
     e.preventDefault()
     try {
       let entrada = url.trim()
-      if (modo === 'video' && arquivos[0]) {
+      if (modo !== 'live' && arquivos[0]) {
         setEnviando(0)
         entrada = await upload(arquivos[0], setEnviando)
       }
@@ -171,6 +188,7 @@ function NovoCorte({ estrategias, templates, onCriado }: { estrategias: Estrateg
         limite,
         dur_min: durMin,
         dur_max: durMax,
+        ...(gameplay && { gameplay: true }),
         ...(modo === 'live' && { dias, horas: parseHoras(horas), webhook }),
       })
       toast.success(modo === 'live' ? 'Monitoramento iniciado' : 'Processando o vídeo', { description: nomeEntrada(job.entrada) })
@@ -212,16 +230,19 @@ function NovoCorte({ estrategias, templates, onCriado }: { estrategias: Estrateg
               placeholder={modo === 'live' ? 'https://www.twitch.tv/seucanal' : 'https://www.youtube.com/watch?v=…'}
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              disabled={modo === 'video' && arquivos.length > 0}
+              disabled={modo !== 'live' && arquivos.length > 0}
             />
           </div>
 
-          {modo === 'video' && (
+          {modo !== 'live' && (
             <>
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
                 <div className="h-px flex-1 bg-border" /> ou envie um arquivo <div className="h-px flex-1 bg-border" />
               </div>
               <FileUpload accept="video/*" files={arquivos} onFilesChange={setArquivos} disabled={enviando !== null} />
+              <div className="rounded-lg border p-4">
+                <ChaveGameplay titulo="Vídeo gameplay" ativo={gameplay} set={setGameplay} />
+              </div>
             </>
           )}
 
@@ -269,6 +290,7 @@ function NovoCorte({ estrategias, templates, onCriado }: { estrategias: Estrateg
               <p className="text-sm text-muted-foreground">
                 Começa a clipar assim que o canal entrar ao vivo, em lotes de 10 minutos, sem esperar a live acabar.
               </p>
+              <ChaveGameplay titulo="Live gameplay" ativo={gameplay} set={setGameplay} />
               <div className="flex flex-col gap-2">
                 <Label>Dias (vazio = todos)</Label>
                 <div className="flex flex-wrap gap-1.5">
