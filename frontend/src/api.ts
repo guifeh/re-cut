@@ -31,6 +31,7 @@ export type EstadoPlataforma = {
   link: string | null
   erro: string | null
   em: string
+  publish_at?: string | null
 }
 /** {} enquanto o corte não foi aprovado */
 export type Publicacao = {
@@ -213,6 +214,8 @@ export const api = {
     post<Publicacao>(`/api/jobs/${jobId}/cortes/aprovar`, { json, legenda, hashtags }),
   publicacao: (jobId: string, json: string, plataforma: Plataforma | 'telegram', acao: 'tentar' | 'forcar' | 'link', link?: string) =>
     post<Publicacao>(`/api/jobs/${jobId}/cortes/publicacao`, { json, plataforma, acao, link }),
+  enviarCorte: (corte: Corte, plataforma: 'youtube' | 'telegram', opcoes: { publish_at?: string; forcar?: boolean } = {}) =>
+    post<Publicacao>(`/api/jobs/${jobDoCorte(corte)}/cortes/enviar`, { json: corte.json, plataforma, ...opcoes }),
   configurarTelegram: (token: string) => post<ContaTelegram>('/api/contas/telegram/configurar', { token }),
   desconectarTelegram: () => post<ContaTelegram>('/api/contas/telegram/desconectar', {}),
   contas: () => req<Conta[]>('/api/contas'),

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from unittest.mock import ANY
 
 from esteira import estado, eventos, resumo_do_dia
@@ -153,3 +153,13 @@ def test_feed_com_publicacao_continua_limitado_a_50():
     evs = [ev("ia", "fim", str(i)) for i in range(60)]
     feed = estado(evs, vivo=False, cortes=[{"nome": "c", "nota": 1, "publicacao": pub}])["feed"]
     assert len(feed) == 50 and feed[0]["etapa"] == "youtube"
+
+
+def test_agendado_nao_conta_como_publicado_antes_do_horario():
+    pub = {"aprovado_em": "2026-11-08T09:00:00", "plataformas": {
+        "youtube": {"estado": "ok", "em": "2026-11-08T09:00:00", "publish_at": "2026-11-08T15:00:00Z"}}}
+    cortes = [{"nome": "c", "publicacao": pub}]
+    assert resumo_do_dia(cortes, date(2026, 11, 8), datetime(2026, 11, 8, 14, tzinfo=timezone.utc))["postados"] == 0
+    assert resumo_do_dia(cortes, date(2026, 11, 8), datetime(2026, 11, 8, 16, tzinfo=timezone.utc))["postados"] == 1
+    feed = estado([], False, cortes)["feed"]
+    assert feed[0]["msg"] == "Agendamento no YouTube confirmado · c"

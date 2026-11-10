@@ -1,6 +1,6 @@
 """Estado da esteira derivado dos eventos '@@ {...}' do log do job. Funções puras, sem I/O."""
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 
 import contas
 from recut import ETAPAS, PREFIXO_EVENTO
@@ -127,6 +127,8 @@ def _feed_publicacao(aprovados):
                 continue
             if est == "ok":
                 msg = "Link do TikTok salvo" if p == "tiktok" else f"Postado no {NOMES.get(p, p)}"
+                if x.get("publish_at"):
+                    msg = f"Agendamento no {NOMES.get(p, p)} confirmado"
             elif est in ("erro", "incerto"):
                 msg = x.get("erro") or est
             else:
@@ -140,7 +142,19 @@ def _feed_publicacao(aprovados):
     return linhas
 
 
-def resumo_do_dia(cortes: list[dict], hoje: date) -> dict:
+def _postado_no_dia(estado, hoje, agora):
+    if estado.get("estado") != "ok":
+        return False
+    if not estado.get("publish_at"):
+        return str(estado.get("em", ""))[:10] == hoje.isoformat()
+    try:
+        data = datetime.fromisoformat(estado["publish_at"].replace("Z", "+00:00"))
+        return data.utcoffset() is not None and data <= agora and data.astimezone().date() == hoje
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def resumo_do_dia(cortes: list[dict], hoje: date, agora=None) -> dict:
     """Contagens de "Hoje" na Esteira (os rótulos da tela entre aspas):
     cortes ("Cortes gerados"): cortes com criado_em no dia;
     aprovados ("Cortes aprovados"): cortes com aprovado_em no dia;
@@ -153,6 +167,6 @@ def resumo_do_dia(cortes: list[dict], hoje: date) -> dict:
     return {
         "cortes": sum(str(c.get("criado_em", ""))[:10] == d for c in cortes),
         "aprovados": len(do_dia),
-        "postados": sum(x.get("estado") == "ok" and str(x.get("em", ""))[:10] == d for x in plats),
+        "postados": sum(_postado_no_dia(x, hoje, agora or datetime.now(timezone.utc)) for x in plats),
         "erros": sum(x.get("estado") in ("erro", "incerto") for p in do_dia for x in p.get("plataformas", {}).values()),
     }

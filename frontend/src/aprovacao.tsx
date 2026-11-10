@@ -80,7 +80,7 @@ function Esperando({ job, corte: c, onMudou }: { job: Job; corte: Corte; onMudou
     try {
       const r = await api.aprovar(job.id, c.json, legenda, marcadas)
       setFase('aprovado') // fica travado sem spinner até o próximo polling tirar o corte desta lista
-      toast.success('Aprovado: enviando para YouTube e Instagram', {
+      toast.success('Corte aprovado', {
         description: r.telegram ? 'O TikTok foi para o seu Telegram: poste pelo celular e responda à mensagem com o link.' : 'O TikTok fica com você: baixe o vídeo e cole o link depois.',
       })
       onMudou()
@@ -235,7 +235,9 @@ function LinhaPlataforma({ job, corte: c, plataforma: p, estado: e, texto, onMud
         <span className="font-medium">{NOME[p]}</span>
         <span className={COR_PUBLICACAO[e.estado]}>
           {e.estado === 'enviando' ? <span className="inline-flex items-center gap-1"><Loader2 className="size-3 animate-spin" /> enviando…</span>
-            : { ok: 'postado', erro: 'erro', incerto: 'incerto', manual: 'com você' }[e.estado]}
+            : e.estado === 'ok' && e.publish_at
+              ? `agendado · ${new Date(e.publish_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}`
+              : { ok: 'postado', erro: 'erro', incerto: 'incerto', manual: 'com você' }[e.estado]}
         </span>
       </div>
 

@@ -26,6 +26,7 @@ import publicar
 import recut
 import telegram
 import lixeira as lixeira_mod
+import lembretes
 from lixeira import Lixeira
 
 RAIZ = Path(__file__).parent
@@ -296,6 +297,19 @@ def mudar_publicacao(job_dir, dados):
     return publicacao_api(f)
 
 
+def enviar_corte(job_dir, dados):
+    f = corte_do_job(job_dir, dados.get("json"))
+    plataforma = dados.get("plataforma")
+    if plataforma not in ("youtube", "telegram"):
+        raise ValueError("escolha YouTube ou Telegram")
+    forcar = dados.get("forcar", False)
+    if not isinstance(forcar, bool):
+        raise ValueError("forcar deve ser verdadeiro ou falso")
+    _disparar(f, [plataforma], lambda: publicar.preparar_envio(
+        f, plataforma, publish_at=dados.get("publish_at"), forcar=forcar, pasta_contas=contas.PASTA))
+    return publicacao_api(f)
+
+
 def texto(dados, chave):
     v = dados.get(chave)
     if not isinstance(v, str):
@@ -517,6 +531,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.json(aprovar_corte(self.job_dir(partes[2]), self.corpo_json()))
             if partes[:2] == ["api", "jobs"] and partes[3:] == ["cortes", "publicacao"] and len(partes) == 5:
                 return self.json(mudar_publicacao(self.job_dir(partes[2]), self.corpo_json()))
+            if partes[:2] == ["api", "jobs"] and partes[3:] == ["cortes", "enviar"] and len(partes) == 5:
+                return self.json(enviar_corte(self.job_dir(partes[2]), self.corpo_json()))
             if partes[:2] == ["api", "contas"] and len(partes) == 4:
                 p, acao = partes[2], partes[3]
                 if p == "telegram" and acao == "configurar":
@@ -577,6 +593,7 @@ if __name__ == "__main__":
     JOBS.mkdir(exist_ok=True)
     threading.Thread(target=expirar_periodicamente, daemon=True).start()
     threading.Thread(target=telegram.ouvir, args=(JOBS,), kwargs={"pasta": contas.PASTA}, daemon=True).start()
+    threading.Thread(target=lembretes.ouvir, args=(JOBS,), kwargs={"pasta": contas.PASTA}, daemon=True).start()
     print(f"re-cut em http://localhost:{PORTA}")
     if REDE:
         try:  # UDP sem enviar nada: o SO escolhe a placa da rota padrão (gethostname pega VPN/Hyper-V no Windows)
