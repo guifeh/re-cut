@@ -34,6 +34,8 @@ import uuid
 from array import array
 from pathlib import Path
 
+import enquadramento
+
 try:  # ffmpeg estático do pip (já vem com libass/libx264); RECUT_FFMPEG sobrepõe
     import imageio_ffmpeg
     FFMPEG = os.getenv("RECUT_FFMPEG") or imageio_ffmpeg.get_ffmpeg_exe()
@@ -516,7 +518,7 @@ def ancora_gameplay(t, tipo, trechos, H):
 
 
 def filtro_video(tpl, iw, ih, nome, x=None, seguir=False, com_logo=False, zooms=(), flashes=(), com_emoji=False,
-                 base=None):
+                 base=None, foco=None):
     """filter_complex do ffmpeg para o template. x: posição do recorte (None = centro); com seguir=True
     ele é só o primeiro quadro e o resto vem do arquivo <nome>.cmd via sendcmd. zooms: (t, ax, ay) com t em
     segundos relativos ao corte e (ax, ay) o rosto no quadro final (ancora_zoom); flashes: segundos.
@@ -542,6 +544,9 @@ def filtro_video(tpl, iw, ih, nome, x=None, seguir=False, com_logo=False, zooms=
         v += (f",fps=30,zoompan=z='{z}'"
               f":x='max(0\\,min(iw-iw/zoom\\,iw*({ax})-iw/zoom/2))'"
               f":y='max(0\\,min(ih-ih/zoom\\,ih*({ay})-ih/zoom/2))':d=1:s={W}x{H}:fps=30")
+    if foco:
+        # No painel compartilhado, o zoom não deve esconder partes da tela.
+        v = enquadramento.compor(v, foco, iw, ih, W, H)
     for t in flashes:  # transição de "virada": clarão branco rápido
         v += (f",drawbox=x=0:y=0:w=iw:h=ih:color=white@0.8:t=fill:enable='between(t\\,{t:.2f}\\,{t + 0.06:.2f})'"
               f",drawbox=x=0:y=0:w=iw:h=ih:color=white@0.35:t=fill:enable='between(t\\,{t + 0.06:.2f}\\,{t + 0.18:.2f})'")
@@ -914,8 +919,13 @@ def renderizar(video, c, palavras, saida, nome, tpl=None, layout=""):
     por_efeito = {e: [(rel, m) for rel, efeito, m in plano if efeito == e] for e in EFEITOS}
     tempos_zoom = [rel for rel, _ in por_efeito["zoom"]]
     base = None
+    foco = None
     if layout == "gameplay":
         base, trechos, iw, ih = layout_gameplay(video, c, W, H)
+    else:
+        foco = c.get("enquadramento_auto") or enquadramento.analisar(video, c["inicio"], c["fim"], FFMPEG)
+        if foco:
+            c["enquadramento_auto"] = foco
     if base:
         zooms = [(rel, *ancora_gameplay(rel, m["tipo"], trechos, H)) for rel, m in por_efeito["zoom"]]
     else:
@@ -959,13 +969,15 @@ def renderizar(video, c, palavras, saida, nome, tpl=None, layout=""):
         else:
             print(f"  som de '{m['tipo']}' não encontrado em efeitos/; seguindo sem ele", file=sys.stderr)
     args = [FFMPEG, "-v", "error", "-y", "-ss", f"{c['inicio']:.2f}", "-t", f"{dur:.2f}", "-i", str(Path(video).resolve())]
+    if foco:
+        args += ["-filter_complex_threads", "2"]
     if com_logo:
         args += ["-i", str(Path(logo).resolve())]
     for _, arq in sons:
         args += ["-i", str(arq.resolve())]
     grafo = filtro_video(tpl, iw, ih, nome, x, seguir, com_logo,
                          zooms=zooms, flashes=[rel for rel, _ in por_efeito["flash"]], com_emoji=bool(por_efeito["emoji"]),
-                         base=base)
+                         base=base, foco=foco)
     audio = filtro_audio([rel for rel, _ in sons], 2 if com_logo else 1, vel)
     if audio:
         args += ["-filter_complex", f"{grafo};{audio}", "-map", "[out]", "-map", "[aout]"]

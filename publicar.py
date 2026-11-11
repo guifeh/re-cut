@@ -110,7 +110,10 @@ def texto_final(legenda, hashtags):
     return (legenda.strip()[:2200 - len(sufixo)] + sufixo)[:2200]
 
 
-def aprovar(corte_json, legenda, hashtags, pasta_contas=contas.PASTA):
+SOCIAIS_NAVEGADOR = ("instagram", "tiktok")
+
+
+def aprovar(corte_json, legenda, hashtags, pasta_contas=contas.PASTA, navegador=False):
     """Aprova os destinos ainda ausentes, preservando os envios individuais feitos pela grade."""
     try:
         tg = telegram.conta(pasta_contas)
@@ -123,8 +126,12 @@ def aprovar(corte_json, legenda, hashtags, pasta_contas=contas.PASTA):
             raise ValueError("esse corte já foi aprovado")
         pub.update(aprovado_em=_agora(), legenda=legenda, hashtags=list(hashtags))
         plataformas = pub.setdefault("plataformas", {})
-        pendentes = [p for p in contas.PLATAFORMAS if p not in plataformas]
+        pendentes = [p for p in contas.PLATAFORMAS if p not in plataformas
+                     and not (navegador and p in SOCIAIS_NAVEGADOR)]
         plataformas.update({p: _estado("enviando") for p in pendentes})
+        if navegador:
+            for p in SOCIAIS_NAVEGADOR:
+                plataformas.setdefault(p, _estado("na_fila", navegador=True))
         plataformas.setdefault("tiktok", _estado("manual"))
         if pareado and not pub.get("telegram"):
             pub["telegram"] = {"estado": "enviando", "erro": None, "em": _agora(), "mensagens": [],
@@ -132,6 +139,18 @@ def aprovar(corte_json, legenda, hashtags, pasta_contas=contas.PASTA):
             pendentes.append("telegram")
         recut.gravar_json(_arquivo(corte_json), pub)
     return pendentes
+
+
+def registrar_envio_navegador(corte_json, plataforma, estado, erro=None):
+    return _mudar(corte_json, plataforma, estado, erro=erro)
+
+
+def envio_navegador_pendente(corte_json, plataforma):
+    with _trava:
+        pub = _ler(corte_json)
+        estado = pub.get("plataformas", {}).get(plataforma, {})
+        if estado.get("navegador") and estado.get("estado") == "na_fila":
+            return pub
 
 
 def data_publicacao(valor):
@@ -218,8 +237,13 @@ def tentar_de_novo(corte_json, plataforma, forcar, pasta_contas=contas.PASTA):
             raise ValueError(f"não dá para reenviar agora ({estado})")
         if plataforma == "telegram":
             _registro_telegram(pub, pasta_contas)
+        if reg.get("navegador"):
+            reg.update(estado="na_fila", erro=None, em=_agora())
+            recut.gravar_json(_arquivo(corte_json), pub)
+            return []
         reg.update(estado="enviando", erro=None, em=_agora())  # container fica: ver _instagram
         recut.gravar_json(_arquivo(corte_json), pub)
+        return [plataforma]
 
 
 def colar_link(corte_json, plataforma, link):

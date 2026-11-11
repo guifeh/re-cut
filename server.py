@@ -7,6 +7,7 @@ import ipaddress
 import json
 import mimetypes
 import os
+import worker_social
 import re
 import secrets
 import socket
@@ -275,7 +276,8 @@ def aprovar_corte(job_dir, dados):
         raise ValueError("escreva a legenda")
     if not isinstance(hashtags, list) or not all(isinstance(h, str) for h in hashtags):
         raise ValueError("hashtags deve ser uma lista de textos")
-    _disparar(f, (*contas.PLATAFORMAS, "telegram"), lambda: publicar.aprovar(f, legenda, hashtags, pasta_contas=contas.PASTA))
+    _disparar(f, (*contas.PLATAFORMAS, "telegram"), lambda: publicar.aprovar(
+        f, legenda, hashtags, pasta_contas=contas.PASTA, navegador=worker_social.habilitado()))
     return publicacao_api(f)
 
 
@@ -291,7 +293,7 @@ def mudar_publicacao(job_dir, dados):
     elif acao in ("tentar", "forcar"):
         if p not in (*contas.PLATAFORMAS, "telegram"):
             raise ValueError(f"o {p} é manual: cole o link do post")
-        _disparar(f, [p], lambda: publicar.tentar_de_novo(f, p, acao == "forcar", pasta_contas=contas.PASTA) or [p])
+        _disparar(f, [p], lambda: publicar.tentar_de_novo(f, p, acao == "forcar", pasta_contas=contas.PASTA))
     else:
         raise ValueError("acao deve ser tentar, forcar ou link")
     return publicacao_api(f)
@@ -592,8 +594,11 @@ class Handler(SimpleHTTPRequestHandler):
 if __name__ == "__main__":
     JOBS.mkdir(exist_ok=True)
     threading.Thread(target=expirar_periodicamente, daemon=True).start()
-    threading.Thread(target=telegram.ouvir, args=(JOBS,), kwargs={"pasta": contas.PASTA}, daemon=True).start()
+    if os.environ.get("RECUT_TELEGRAM_RECEIVER") != "hermes":
+        threading.Thread(target=telegram.ouvir, args=(JOBS,), kwargs={"pasta": contas.PASTA}, daemon=True).start()
     threading.Thread(target=lembretes.ouvir, args=(JOBS,), kwargs={"pasta": contas.PASTA}, daemon=True).start()
+    if worker_social.habilitado():
+        threading.Thread(target=worker_social.ouvir, args=(JOBS,), daemon=True).start()
     print(f"re-cut em http://localhost:{PORTA}")
     if REDE:
         try:  # UDP sem enviar nada: o SO escolhe a placa da rota padrão (gethostname pega VPN/Hyper-V no Windows)

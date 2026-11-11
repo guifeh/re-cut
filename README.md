@@ -20,6 +20,15 @@ entrada ──► transcrição ──► análise ──► regra do lote ─�
 - **Lixeira (safe-delete):** excluir um corte ou um vídeo inteiro nunca apaga na hora: move para `lixeira/`, onde fica 30 dias (`RECUT_LIXEIRA_DIAS`) e pode ser restaurado. O vídeo vai com os cortes e com o arquivo enviado (se nenhum outro vídeo usar o mesmo upload). Cada ação (excluído, restaurado, apagado de vez, expirado) fica em `lixeira/registro.jsonl` com data, hora e o vídeo afetado, e aparece no histórico da aba Lixeira. Não dá para excluir um vídeo que ainda está processando.
 - **Estratégias:** instruções em linguagem natural ("foque em dicas práticas de até 60s") salvas em `estrategias/<nome>.txt` e reutilizadas.
 - **Gameplay:** para gravações de jogo em terceira pessoa (ex.: GTA), o interruptor "Vídeo gameplay" / "Live gameplay" (`--gameplay`) divide a tela: a facecam do streamer em cima e o meio da tela, onde fica o personagem, embaixo. A facecam é achada sozinha (o rosto que fica parado no mesmo lugar; personagens do jogo andam pela tela) e, nos trechos sem ela (zoom da edição, tela de celular), o gameplay ocupa a tela toda. Em risada e reação o zoom mira a facecam. Trocar o template do corte mantém o layout.
+- **Painel compartilhado do Flow Games:** com o TalkNet instalado, o re-cut reconhece automaticamente o layout de quatro câmeras com painel central, preserva o conteúdo compartilhado e destaca a câmera do falante abaixo. Em caso de dúvida, exibe as quatro câmeras. O enquadramento é reaproveitado ao trocar de template, que continua definindo as legendas e o estilo.
+
+Para preparar o TalkNet no Windows, execute uma vez na raiz do projeto:
+
+```powershell
+.\.venv\Scripts\python.exe enquadramento.py --preparar
+```
+
+O modelo roda em CPU em um ambiente separado. Fontes sem o layout reconhecido seguem o enquadramento configurado no template.
 - **Enquadramento:** detecta o rosto a cada 0,5 s e move o recorte com suavização (mediana + zona morta + pan gradual).
 - **Eventos:** webhook opcional recebe `live_started`, `live_clips` (a cada lote) e `live_ended`.
 
@@ -77,6 +86,41 @@ npm run build
 ```
 
 ## Uso
+
+### Servidor MCP local
+
+Mantenha o `server.py` rodando. O FastMCP usa a API local do re-cut, com o mesmo estado dos jobs e cortes que aparecem no painel.
+
+Configure o cliente MCP para iniciar `mcp_recut.py` por `stdio` usando o Python do ambiente virtual. No Hermes, adicione ao `config.yaml` e ajuste os caminhos:
+
+```yaml
+mcp_servers:
+  recut:
+    command: 'D:/Users/teste/Documents/re-cut/.venv/Scripts/python.exe'
+    args: ['D:/Users/teste/Documents/re-cut/mcp_recut.py']
+```
+
+O MCP consulta `127.0.0.1:8000` por padrão. Se a API usar outra porta, passe `RECUT_PORT` no ambiente do cliente.
+
+As ferramentas cobrem consulta de jobs, templates e estratégias, criação de vídeo/VOD ou monitoração de live com Gameplay, parada de job, reaplicação de template, recusa, aprovação e envio ao Telegram ou YouTube. Para agendar no YouTube, informe `publish_at` em ISO 8601 com fuso horário.
+
+`aprovar_corte` executa o fluxo de publicação atual do re-cut. A aprovação exige uma instrução explícita do usuário. A integração com o bot do Telegram e o worker do Chrome são etapas separadas.
+
+### Publicação pelo Chrome
+
+Configure um perfil dedicado para Instagram e TikTok no PowerShell:
+
+```powershell
+$env:RECUT_CHROME_PROFILE = Join-Path $env:LOCALAPPDATA 'recut-chrome'
+.venv\Scripts\python.exe worker_social.py
+```
+
+Entre nas duas contas nas abas abertas e pressione Enter para fechar o Chrome.
+Inicie `server.py` no mesmo terminal, com essa variável definida. As novas
+aprovações enviam para o YouTube pela API e colocam Instagram e TikTok na fila
+local. O Telegram continua seguindo a configuração da conta pareada.
+Mantenha o perfil dedicado fechado entre os envios para que o worker possa abri-lo.
+Se um destino ficar como incerto, confira na rede antes de tentar novamente.
 
 ### Interface web
 

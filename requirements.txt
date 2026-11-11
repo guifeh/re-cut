@@ -3,3 +3,5 @@ faster-whisper
 opencv-python-headless<5  # OpenCV 5 removeu CascadeClassifier (Haar)
 yt-dlp[default]  # inclui yt-dlp-ejs, que resolve o desafio JS do YouTube
 imageio-ffmpeg  # ffmpeg estático com libass e libx264
+fastmcp>=3.4,<4
+selenium>=4.26,<5
