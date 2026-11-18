@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import datetime as dt
 
 import pytest
@@ -457,6 +458,25 @@ def test_telegram_video_grande_nao_tenta(corte, pareado, monkeypatch):
     http = Falso()
     r = enviar(corte, "telegram", http=http, pasta_contas=pareado)
     assert r["estado"] == "erro" and "aceita até 50 MB" in r["erro"] and http.chamadas == []
+
+
+def test_telegram_video_grande_vai_comprimido(corte, pareado, monkeypatch):
+    import publicar
+    monkeypatch.setattr(publicar, "LIMITE_TELEGRAM", 1000)
+    meta = json.loads(corte.read_text())
+    corte.write_text(json.dumps({**meta, "duracao": 30}))
+
+    def comprimir(video, duracao, pasta):
+        assert duracao == 30
+        leve = Path(pasta) / video.name
+        leve.write_bytes(b"c" * 500)
+        return leve
+    monkeypatch.setattr(publicar, "_comprimir_para_telegram", comprimir)
+    aprovar(corte, "x", [], pasta_contas=pareado)
+    http = Falso(tg({"message_id": 1}), tg({"message_id": 2}))
+    r = enviar(corte, "telegram", http=http, pasta_contas=pareado)
+    assert r["estado"] == "ok" and b"c" * 500 in http.chamadas[0]["corpo"]
+    assert (corte.parent / "fonte_corte01.mp4").read_bytes() == b"v" * 1234  # original intacto
 
 
 def test_telegram_outro_bot_nao_reenvia(corte, pareado):

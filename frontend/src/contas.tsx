@@ -328,7 +328,7 @@ function CartaoTelegram({ conta: c, onMudou, onPoll }: { conta: ContaTelegram; o
             <li>Clique em Abrir no Telegram e toque em Começar.</li>
             <li>Aprove um corte, poste no TikTok pelo celular e responda à mensagem do corte com o link do post: o re-cut salva o link.</li>
           </ol>
-          <p className="mt-2 text-xs text-muted-foreground">Vídeos acima de 50 MB não passam pelo bot (use Baixar no painel). Só cortes aprovados depois de conectar chegam. Guia: <code>docs/contas-passo-a-passo.md</code>, seção 4.</p>
+          <p className="mt-2 text-xs text-muted-foreground">Vídeos acima de 50 MB vão comprimidos para caber no bot. Só cortes aprovados depois de conectar chegam. Guia: <code>docs/contas-passo-a-passo.md</code>, seção 4.</p>
         </details>
       </CardContent>
     </Card>
