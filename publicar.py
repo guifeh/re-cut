@@ -9,6 +9,8 @@ import datetime as dt
 import html
 import json
 import math
+import subprocess
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -180,8 +182,6 @@ def preparar_envio(corte_json, plataforma, publish_at=None, forcar=False, pasta_
     if plataforma == "telegram":
         if not conta.get("token") or not conta.get("chat_id"):
             raise ValueError("conecte o Telegram na aba Contas")
-        if video.stat().st_size > LIMITE_TELEGRAM:
-            raise ValueError("o Telegram aceita vídeos de até 50 MB; use Baixar")
     elif not conta.get("refresh_token") and not conta.get("access_token"):
         raise ValueError("conecte o YouTube na aba Contas")
     with _trava:
@@ -368,6 +368,20 @@ def _repetindo_429(chamada, esperar):
             esperar(e.retry_after or 1)
 
 
+def _comprimir_para_telegram(video, duracao, pasta):
+    """Recomprime para caber no limite do bot: bitrate alvo pela duração, com 10% de folga para o contêiner."""
+    destino = Path(pasta) / video.name
+    bits = int(LIMITE_TELEGRAM * 8 * 0.9 / duracao) - 128_000  # menos o áudio
+    try:
+        subprocess.run([recut.FFMPEG, "-v", "error", "-y", "-i", str(video), "-c:v", "libx264", "-preset", "veryfast",
+                        "-b:v", str(bits), "-maxrate", str(bits), "-bufsize", str(2 * bits),
+                        "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(destino)],
+                       check=True, capture_output=True)
+    except (OSError, subprocess.CalledProcessError):
+        raise ValueError("não deu para comprimir o vídeo para o Telegram: use o Baixar") from None
+    return destino
+
+
 def _enviar_telegram(corte_json, http, esperar, pasta_contas):
     """Vídeo (mensagens[0]) e texto (mensagens[1]); o que já está em mensagens não é reenviado.
     Mesmo contrato de enviar: nunca levanta depois de começar."""
@@ -376,6 +390,7 @@ def _enviar_telegram(corte_json, http, esperar, pasta_contas):
         if pub.get("telegram", {}).get("estado") != "enviando":
             raise ValueError("telegram não está para enviar")
     tok, etapa = None, ["antes"]
+    tmp = tempfile.TemporaryDirectory()  # cópia comprimida, se precisar; o corte original não muda
     try:
         t = _registro_telegram(pub, pasta_contas)
         tok, chat, mensagens = telegram.conta(pasta_contas)["token"], t["chat_id"], list(t.get("mensagens") or [])
@@ -390,6 +405,11 @@ def _enviar_telegram(corte_json, http, esperar, pasta_contas):
         if not mensagens:
             meta = json.loads(Path(corte_json).read_text(encoding="utf-8"))
             video = Path(corte_json).with_name(meta["arquivo"])
+            duracao = meta.get("duracao")
+            if not (isinstance(duracao, (int, float)) and math.isfinite(duracao) and duracao > 0):
+                duracao = None
+            if video.stat().st_size > LIMITE_TELEGRAM and duracao:
+                video = _comprimir_para_telegram(video, duracao, tmp.name)
             tamanho = video.stat().st_size
             if tamanho > LIMITE_TELEGRAM:
                 raise ValueError(f"o vídeo tem {math.ceil(tamanho / 1024 / 1024)} MB e o Telegram aceita até 50 MB: "
@@ -402,8 +422,7 @@ def _enviar_telegram(corte_json, http, esperar, pasta_contas):
             largura, altura = recut.tamanho_video(video)
             if largura > 0 and altura > 0:
                 dados.update(width=largura, height=altura)
-            duracao = meta.get("duracao")
-            if isinstance(duracao, (int, float)) and math.isfinite(duracao) and duracao > 0:
+            if duracao:
                 dados["duration"] = math.ceil(duracao)
             # ponytail: 10 min para subir até 50 MB; aumentar se a conexão for lenta
             passo("sendVideo", dados, ("video", video), timeout=600)
@@ -419,3 +438,5 @@ def _enviar_telegram(corte_json, http, esperar, pasta_contas):
         if tok:
             msg = msg.replace(tok, "***")
         return _mudar_telegram(corte_json, "incerto" if incerto else "erro", erro=msg)
+    finally:
+        tmp.cleanup()
